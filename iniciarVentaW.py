@@ -434,101 +434,6 @@ def total_qr_caja(cid):
     df = CAJAS_DATA[cid]["qr"]
     return 0 if df is None else df["QR_FINAL"].sum()
 
-def abrir_detalle_qr(vendedor, root):
-    w = widgets.get(vendedor)
-
-    # si la caja está unida → usamos la nueva
-    if w and isinstance(w.get("caja_id"), frozenset) and len(w["caja_id"]) > 1:
-        return ver_detalle_qr_caja(vendedor, root)
-
-    # si no → comportamiento original
-    return ver_detalle_qr(vendedor, root)
-
-def ver_detalle_qr_caja(vendedor_excel, root):
-    datos = obtener_datos_caja(vendedor_excel)
-
-    if not datos or datos["qr"] is None or datos["qr"].empty:
-        messagebox.showinfo(
-            "Sin Datos QR",
-            f"No hay transacciones QR para la caja de: {vendedor_excel}"
-        )
-        return
-
-    # reutilizamos la lógica original
-    df_qr = datos["qr"].copy()
-    TRANSACCION_QR_BUSCADA_LOCAL = globals().get("TRANSACCION_QR_BUSCADA")
-
-    # ---- desde acá es copia directa de ver_detalle_qr ----
-
-    def texto_comprobante(r):
-        nco = r.get("NCO")
-        if pd.isna(nco) or str(nco).strip() == "":
-            return "SIN COMPROBANTE"
-        tip = "" if pd.isna(r.get("TIP")) else str(r.get("TIP")).strip()
-        tco = "" if pd.isna(r.get("TCO")) else str(r.get("TCO")).strip()
-        return f"{tip} {tco} {str(nco).strip()}".strip()
-
-    df_qr["COMPROBANTE_TXT"] = df_qr.apply(texto_comprobante, axis=1)
-
-    nro_busqueda = TRANSACCION_QR_BUSCADA_LOCAL
-    if nro_busqueda:
-        df_qr = df_qr[
-            df_qr["ID_TRANSACCION"].astype(str) == str(nro_busqueda)
-        ]
-        if df_qr.empty:
-            messagebox.showinfo(
-                "Transacción no encontrada",
-                "La transacción no se encontró para esta caja."
-            )
-            return
-
-    top = tk.Toplevel(root)
-    top.title(f"Detalle QR (CAJA UNIFICADA): {vendedor_excel}")
-    top.geometry("1350x520")
-    top.grab_set()
-
-    cols = (
-        "Comprobante",
-        "Fecha",
-        "Importe",
-        "Cashout",
-        "Descuento",
-        "Total QR",
-        "Transacción"
-    )
-
-    tree = ttk.Treeview(top, columns=cols, show="headings")
-    for c in cols:
-        tree.heading(c, text=c)
-        tree.column(c, width=180, anchor="center")
-    tree.pack(fill="both", expand=True, padx=5, pady=5)
-
-    total_interfaz = 0.0
-    for _, r in df_qr.iterrows():
-        fecha = pd.to_datetime(r["FEC"]).strftime("%d/%m/%Y %H:%M")
-        tree.insert(
-            "",
-            "end",
-            values=(
-                r["COMPROBANTE_TXT"],
-                fecha,
-                formatear_moneda_ui(r["IMPORTE"]),
-                formatear_moneda_ui(r["CASHOUT"]),
-                formatear_moneda_ui(r["DESC_PROMO_NUM"]),
-                formatear_moneda_ui(r["QR_FINAL"]),
-                r["ID_TRANSACCION"]
-            )
-        )
-        total_interfaz += float(r["QR_FINAL"])
-
-    tk.Label(
-        top,
-        text=f"TOTAL QR: {formatear_arg(total_interfaz)}",
-        font=("Arial", 13, "bold"),
-        bg="#2980b9",
-        fg="white"
-    ).pack(side="bottom", fill="x")
-
 def obtener_datos_caja(vendedor):
     """
     Devuelve TODOS los datos reales de la caja a la que
@@ -3054,19 +2959,30 @@ def ver_detalle_qr(vendedor_excel, root, reasignado=False):
     nombre_encontrado = "Desconocido"
 
     # -------------------------
-    # Buscar vendedor en cache QR
+    # 0. Check for Unified Box (New Logic)
     # -------------------------
-    for db_name, df in DATOS_DETALLE_QR.items():
-        if son_nombres_similares(vendedor_excel, db_name):
-            df_qr = df.copy()
-            nombre_encontrado = db_name
-            break
+    es_caja_unificada = False
+    w = widgets.get(vendedor_excel)
+    if w and isinstance(w.get("caja_id"), frozenset) and len(w["caja_id"]) > 1:
+        es_caja_unificada = True
+        datos = obtener_datos_caja(vendedor_excel)
+        if datos and datos["qr"] is not None and not datos["qr"].empty:
+            df_qr = datos["qr"].copy()
+            nombre_encontrado = "CAJA UNIFICADA"
+
+    # -------------------------
+    # 1. Buscar vendedor en cache QR (Fallback / Standard)
+    # -------------------------
+    if df_qr.empty and not es_caja_unificada:
+        for db_name, df in DATOS_DETALLE_QR.items():
+            if son_nombres_similares(vendedor_excel, db_name):
+                df_qr = df.copy()
+                nombre_encontrado = db_name
+                break
 
     if df_qr.empty:
-        messagebox.showinfo(
-            "Sin Datos QR",
-            f"No hay transacciones QR para: {vendedor_excel}"
-        )
+        msg = f"No hay transacciones QR para la caja de: {vendedor_excel}" if es_caja_unificada else f"No hay transacciones QR para: {vendedor_excel}"
+        messagebox.showinfo("Sin Datos QR", msg)
         return
 
     # -------------------------
@@ -3415,7 +3331,7 @@ def mostrar_planilla(df=None, root=None):
             text="🔍",
             font=("Arial", 7),
             bg="#ecf0f1",
-            command=lambda x=vendedor: abrir_detalle_qr(x, vent)
+            command=lambda x=vendedor: ver_detalle_qr(x, vent)
 
         ).pack(side="left")
 
