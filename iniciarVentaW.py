@@ -1036,7 +1036,6 @@ def eliminar_transaccion_seleccionada():
         f"La transacción {nro_transaccion} fue eliminada correctamente."
     )
 
-import re
 
 
 def normalizar_desc_promo(texto):
@@ -1445,7 +1444,6 @@ def ventana_asignar_qr_sin_comprobante(root, nro_transaccion, fila_qr):
         command=top.destroy
     ).pack(side="left", padx=5)
 
-import re
 
 def extraer_numeros(texto):
     if not texto:
