@@ -10,6 +10,7 @@ import sys
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from random import randint
 
 # ------------------------------------------------------------
 # 1. CONFIGURACIÓN DB
@@ -1095,8 +1096,6 @@ def limpiar_texto_monetario(valor):
     return limpio[0] if limpio else ""
 #--------------------prueba----------------------------------
 def simular_qr_transaccion_prueba():
-    import pandas as pd
-    from random import randint
 
     global DATOS_DETALLE_QR
 
