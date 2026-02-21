@@ -620,11 +620,6 @@ def obtener_turno_actual():
         return "Turno_Tarde"
     else:
         return None  # no se guarda
-from openpyxl import Workbook
-from openpyxl.styles import Font
-from datetime import datetime
-import os
-from tkinter import messagebox
 
 def guardar_cierre_caja_excel():
     global TURNO_SELECCIONADO, widgets
