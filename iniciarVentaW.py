@@ -2850,12 +2850,14 @@ def recalcular_gnc(
 
 
 
+RE_NUMERO_PREFIJO = re.compile(r'^\d+\s*-\s*')
+
 def normalizar_texto(texto):
     """Limpia el texto, elimina prefijos numerados y lo convierte a mayúsculas."""
     if not texto or str(texto).lower() == 'nan':
         return ""
     # Elimina patrones como "1 - " o "23-"
-    return re.sub(r'^\d+\s*-\s*', '', str(texto)).strip().upper()
+    return RE_NUMERO_PREFIJO.sub('', str(texto)).strip().upper()
 
 def parse_moneda_robusto(valor):
     """Convierte un valor de texto o numérico a float, limpiando símbolos como el $."""
