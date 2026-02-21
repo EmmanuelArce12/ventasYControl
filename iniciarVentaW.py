@@ -14,10 +14,13 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # ------------------------------------------------------------
 # 1. CONFIGURACIÓN DB
 # ------------------------------------------------------------
-DB_IP = "192.168.0.100" 
-DB_USER = "debo" 
-DB_PASS = "debo" 
-DB_NAME = "DEBO"
+from dotenv import load_dotenv
+load_dotenv()
+
+DB_IP = os.getenv("DB_IP")
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+DB_NAME = os.getenv("DB_NAME")
 
 #----------------------------------------Globales--------------
 
