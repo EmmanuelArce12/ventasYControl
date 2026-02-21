@@ -8,6 +8,7 @@ import os
 import urllib.request
 import sys
 from datetime import datetime
+import threading
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -5179,38 +5180,42 @@ def obtener_fecha_internet():
         # Si falla (ej: no hay internet), devolvemos None
         return None
 
-def validar_licencia():
+def validar_licencia(root):
     """Verifica si el programa superó la fecha límite de uso."""
     # ----------------------------------------------------
     # 🔥 CONFIGURA TU FECHA DE CADUCIDAD AQUÍ (Año, Mes, Día)
     # ----------------------------------------------------
-    fecha_caducidad = datetime(2027, 2, 19) 
-    
-    fecha_actual = obtener_fecha_internet()
-    
-    # ¿Qué pasa si justo se corta el internet en la estación?
-    # Usamos la hora local como "salvavidas" temporal para que puedan cerrar la caja igual.
-    if not fecha_actual:
-        fecha_actual = datetime.now()
-        
-    if fecha_actual > fecha_caducidad:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw() # Oculta la ventana principal
-        messagebox.showerror(
-            "Licencia Expirada", 
-            "El período de uso de este sistema ha finalizado.\n"
-            "Por favor, contacte al administrador o desarrollador para renovar la licencia."
-        )
-        sys.exit() # Cierra el proceso por completo y no deja abrir la app
-def main():
-    # 1. Ejecutar el control de seguridad antes de cargar nada
-    validar_licencia()
+    fecha_caducidad = datetime(2027, 2, 19)
 
-    # 2. Cargar el programa normal
+    def check_license():
+        fecha_actual = obtener_fecha_internet()
+
+        # ¿Qué pasa si justo se corta el internet en la estación?
+        # Usamos la hora local como "salvavidas" temporal para que puedan cerrar la caja igual.
+        if not fecha_actual:
+            fecha_actual = datetime.now()
+
+        if fecha_actual > fecha_caducidad:
+            def show_error():
+                root.withdraw() # Oculta la ventana principal
+                messagebox.showerror(
+                    "Licencia Expirada",
+                    "El período de uso de este sistema ha finalizado.\n"
+                    "Por favor, contacte al administrador o desarrollador para renovar la licencia."
+                )
+                root.destroy()
+                sys.exit() # Cierra el proceso por completo y no deja abrir la app
+
+            root.after(0, show_error)
+
+    threading.Thread(target=check_license, daemon=True).start()
+def main():
+    # 1. Cargar el programa normal
     root = tk.Tk()
     root.title("Auditoría Contable")
+
+    # 2. Ejecutar el control de seguridad antes de cargar nada
+    validar_licencia(root)
 
     print("MAIN ARRANCÓ")
 
