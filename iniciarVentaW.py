@@ -8,15 +8,17 @@ import os
 import urllib.request
 import sys
 from datetime import datetime
+import threading
+import queue
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ------------------------------------------------------------
 # 1. CONFIGURACIÓN DB
 # ------------------------------------------------------------
-DB_IP = "192.168.0.100" 
-DB_USER = "debo" 
-DB_PASS = "debo" 
+DB_IP = "192.168.0.100"
+DB_USER = "debo"
+DB_PASS = "debo"
 DB_NAME = "DEBO"
 
 #----------------------------------------Globales--------------
@@ -37,7 +39,7 @@ sf_global = None
 UNDO_STACK = []
 DATOS_PRODUCTOS_FACTURADOS = None
 DATOS_DETALLE_REMITOS = {}
-DATOS_DETALLE_FACTURACION = {} 
+DATOS_DETALLE_FACTURACION = {}
 DATOS_RENDICIONES = {}
 DF_RENDICIONES_CACHE = None
 COLOR_MAS = "#3498db"      # azul
@@ -76,7 +78,7 @@ ESTADO_QR_MANUAL = "ASIGNADO_MANUAL"
 ESTADO_QR_ASIGNADO_MANUAL = "ASIGNADO_MANUAL"
 
 
- 
+
 
 GNC_GENERAL_TOTAL = 0.0
 GNC_COBERTURAS = []            # lista de CoberturaGNC
@@ -127,6 +129,132 @@ ANOTACIONES = {
 
 
 
+def process_sql_results(result_queue):
+    global DATOS_RENDICIONES, DATOS_DETALLE_QR, DESCUENTOS_QR_POR_VENDEDOR
+    global DATOS_PRODUCTOS_FACTURADOS, DATOS_DETALLE_FACTURACION, DATOS_DETALLE_REMITOS
+    global DF_GNC_SQL_CACHE, DF_RENDICIONES_CACHE
+
+    try:
+        if result_queue.empty():
+            if sf_global and sf_global.winfo_exists():
+                sf_global.after(100, lambda: process_sql_results(result_queue))
+            return
+
+        # Restore cursor
+        if sf_global and sf_global.winfo_exists() and sf_global.winfo_toplevel():
+            sf_global.winfo_toplevel().config(cursor="")
+
+        res = result_queue.get_nowait()
+
+        if not res.get("success"):
+            error_msg = res.get("error", "Error desconocido")
+            if error_msg:
+                 messagebox.showerror("Error SQL", error_msg)
+            return
+
+        data = res["data"]
+
+        # Update Globals
+        DF_GNC_SQL_CACHE = data["df_efectivo"].copy()
+        DF_RENDICIONES_CACHE = data["df_efectivo"].copy()
+
+        # Update Rendiciones (Global DATOS_RENDICIONES)
+        # Clear SQL rendiciones
+        for vend in DATOS_RENDICIONES:
+            if 'movimientos' in DATOS_RENDICIONES[vend]:
+                DATOS_RENDICIONES[vend]['movimientos'] = [
+                    m for m in DATOS_RENDICIONES[vend]['movimientos']
+                    if m.get('origen') != 'sql'
+                ]
+
+        # Add new SQL rendiciones
+        for _, row in data["df_efectivo"].iterrows():
+            vendedor_sql = str(row['Vendedor']).strip().upper()
+            monto = parse_moneda_robusto(row['Efectivo'])
+
+            for vend_ui in widgets.keys():
+                if son_nombres_similares(vend_ui, vendedor_sql):
+                    DATOS_RENDICIONES.setdefault(vend_ui, {}).setdefault('movimientos', []).append({
+                        'origen': 'sql',
+                        'planilla': row['Planilla'],
+                        'nro': row['Nro_Mov'],
+                        'tipo': 'Efectivo',
+                        'ref': f"Mov {row['Nro_Mov']} - {row['Fecha']:%d/%m %H:%M}",
+                        'monto': float(monto)
+                    })
+                    break
+
+        refrescar_efectivos_ui()
+
+        # Update QR
+        DATOS_DETALLE_QR.clear()
+        DATOS_DETALLE_QR.update(data["datos_detalle_qr"])
+
+        DESCUENTOS_QR_POR_VENDEDOR.clear()
+        DESCUENTOS_QR_POR_VENDEDOR.update(data["descuentos_qr"])
+
+        # Update UI with QR totals
+        for vendedor_sql, df in DATOS_DETALLE_QR.items():
+            total_qr = round(df["QR_FINAL"].sum(), 2)
+            for vend_ui, w in widgets.items():
+                if son_nombres_similares(vend_ui, vendedor_sql):
+                    w["qr_db"] = total_qr
+                    eq = w["qr"]
+                    eq.config(state="normal")
+                    eq.delete(0, tk.END)
+                    eq.insert(0, f"{total_qr:.2f}")
+                    eq.config(state="disabled")
+                    break
+
+        # Update Facturas
+        global DATOS_PRODUCTOS_FACTURADOS
+        DATOS_PRODUCTOS_FACTURADOS = data["df_fact_purged"]
+        DATOS_DETALLE_FACTURACION.clear()
+        DATOS_DETALLE_FACTURACION.update(data["datos_detalle_facturacion"])
+
+        # Update Percepcion
+        for _, r in data["df_per_sum"].iterrows():
+            nom_sql = r['Nombre_Vendedor']
+            monto = parse_moneda_robusto(r['Percepcion'])
+            for v_ex, w in widgets.items():
+                if son_nombres_similares(v_ex, nom_sql):
+                    w['per'].delete(0, tk.END)
+                    w['per'].insert(0, f"{monto:.2f}")
+
+        # Update Remitos
+        DATOS_DETALLE_REMITOS.clear()
+        DATOS_DETALLE_REMITOS.update(data["datos_detalle_remitos"])
+
+        for _, r in data["df_remito_sum"].iterrows():
+            nom_sql = r['Nombre_Vendedor']
+            monto = r['Total_Remito']
+            for v_ex, w in widgets.items():
+                if son_nombres_similares(v_ex, nom_sql):
+                    w['cta_cte'].config(state="normal")
+                    w['cta_cte'].delete(0, tk.END)
+                    w['cta_cte'].insert(0, f"{monto:.2f}")
+                    w['cta_cte'].config(state="readonly")
+
+        # Update Products UI
+        for _, r in data["df_fact_sum"].iterrows():
+            nom_sql = r['Vendedor_Nombre']
+            monto = r['Total_Neto']
+            for v_ex, w in widgets.items():
+                if son_nombres_similares(v_ex, nom_sql):
+                    w['prod'].delete(0, tk.END)
+                    w['prod'].insert(0, f"{monto:.2f}")
+
+        actualizar_anotaciones_y_qr()
+        refrescar_calculo_principal()
+
+        messagebox.showinfo("Proceso completado", "Consulta SQL finalizada correctamente.")
+
+    except Exception as e:
+        if sf_global and sf_global.winfo_exists() and sf_global.winfo_toplevel():
+            sf_global.winfo_toplevel().config(cursor="")
+        messagebox.showerror("Error UI", f"Error actualizando interfaz: {e}")
+        print("Error UI update:", e)
+
 class AforadorGNC:
     def __init__(self, inicial=0.0, final=0.0, precio=PRECIO_GNC_DEFAULT):
         self.inicial = float(inicial or 0)
@@ -162,7 +290,7 @@ def calcular_gnc_general(aforadores):
     """
     return sum(a.total() for a in aforadores)
 
-def obtener_conexion_sql():
+def obtener_conexion_sql(silent=False):
     """Intenta conectar a la base de datos SQL Server y maneja errores."""
     try:
         conn_str = (
@@ -171,8 +299,337 @@ def obtener_conexion_sql():
         )
         return pyodbc.connect(conn_str)
     except Exception as e:
-        messagebox.showerror("Error de Red", f"No se pudo conectar a la DB:\n{e}")
+        if not silent:
+            messagebox.showerror("Error de Red", f"No se pudo conectar a la DB:\n{e}")
         return None
+
+# =========================
+# SQL QUERIES (CONSTANTS)
+# =========================
+SQL_QR_QUERY = """
+            ;WITH QR_BASE AS (
+    SELECT
+        A.PLA AS Planilla,
+
+        COALESCE(v2.NOMVEN, v1.NOMVEN, 'SIN OPERARIO') AS Operario,
+
+        A.NTRANS AS ID_TRANSACCION,
+
+        CAST(REPLACE(A.IMPORTE, ',', '.') AS DECIMAL(18,2)) AS IMPORTE,
+        CAST(REPLACE(ISNULL(A.CASHOUT, '0'), ',', '.') AS DECIMAL(18,2)) AS CASHOUT,
+
+        A.RED_DES AS DESC_PROMO,
+        CAST(REPLACE(ISNULL(A.RED_TOT,'0'), ',', '.') AS DECIMAL(18,2)) AS DESCUENTO_TOTAL,
+
+        A.FEC,
+        A.ORI,
+        A.LUG,
+        A.EST AS EST_MP,
+
+        A.CAR AS ID_COMPV2,
+        af.TIP,
+        af.TCO,
+        af.NCO
+    FROM A_MERCADOPAGO A
+    LEFT JOIN AMAEFACT_EXT C
+        ON A.CAR = C.ID_COMPV2
+    LEFT JOIN AMAEFACT af
+        ON af.SUC = C.SUC
+       AND af.NCO = C.NCO
+       AND af.TIP = C.TIP
+       AND af.TCO = C.TCO
+    LEFT JOIN VENDEDORES v1 ON af.VEN = v1.CODVEN
+    LEFT JOIN VENDEDORES v2 ON af.OPE = v2.CODVEN
+    WHERE
+        A.PLA BETWEEN ? AND ?
+        OR A.LUG = 5
+        AND A.LUG = 1
+        AND A.EST = 1
+),
+
+-- 🔹 Depuración de duplicados: nos quedamos solo con el “real”
+QR_DEPURADO AS (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               PARTITION BY ID_COMPV2
+               ORDER BY NCO DESC
+           ) AS rn
+    FROM QR_BASE
+),
+
+-- 🔹 Clasificación final de QR
+QR_CLASIFICADO AS (
+    SELECT *,
+        CASE
+            WHEN ID_COMPV2 IS NULL THEN 'QR SIN COMPROBANTE'
+            WHEN NCO IS NULL THEN 'QR COMPROBANTE INEXISTENTE'
+            ELSE 'QR OK'
+        END AS ESTADO_QR,
+        ROUND(IMPORTE + CASHOUT - DESCUENTO_TOTAL, 2) AS QR_NETO_FINAL
+    FROM QR_DEPURADO
+    WHERE rn = 1 -- elimina duplicados/fantasmas
+)
+
+-- =========================
+-- DETALLE POR VENDEDOR
+-- =========================
+SELECT
+    Planilla,
+    Operario,
+    ESTADO_QR,
+    ID_TRANSACCION,
+    IMPORTE,
+    CASHOUT,
+    DESC_PROMO,
+    DESCUENTO_TOTAL,
+    QR_NETO_FINAL,
+    FEC,
+    TIP,
+    TCO,
+    NCO
+FROM QR_CLASIFICADO
+ORDER BY
+    Operario,
+    FEC;
+"""
+
+SQL_FACTURAS_QUERY = """
+                                SELECT
+            f.FEC AS Fecha,
+            f.TCO AS Tipo,
+            f.NCO AS Numero,
+            f.CPA AS Ref_CPA,
+            COALESCE(v_origen.NomVen, v_actual.NomVen, 'DESCONOCIDO') AS Vendedor_Nombre,
+            art.DetArt AS Producto,
+            CAST(d.CAN AS DECIMAL(18,2)) AS Cantidad,
+            CASE
+                WHEN f.TCO LIKE '%NC%' THEN
+                    (CAST(d.CAN AS DECIMAL(18,2)) * -1) * CAST(art.PreVen AS DECIMAL(18,2))
+                ELSE
+                    CAST(d.CAN AS DECIMAL(18,2)) * CAST(art.PreVen AS DECIMAL(18,2))
+            END AS Total_Neto
+        FROM AMAEFACT f
+        INNER JOIN AMOVSTOC d
+            ON f.SUC = d.PVE AND f.NCO = d.NCO
+            AND f.TIP = d.TIP AND f.TCO = d.TCO
+        INNER JOIN ARTICULOS art ON d.ART = art.CodArt
+        LEFT JOIN AMAEFACT f_origen
+            ON f.SUC = f_origen.SUC
+            AND f.TCO LIKE '%NC%'
+            AND f_origen.TCO NOT LIKE '%NC%'
+            AND TRY_CAST(f.CPA AS BIGINT) = f_origen.NCO
+        LEFT JOIN VENDEDORES v_origen ON f_origen.OPE = v_origen.CodVen
+        LEFT JOIN VENDEDORES v_actual ON f.OPE = v_actual.CodVen
+        WHERE f.PLA BETWEEN ? AND ?-- Filtro de planilla
+            AND f.ANU = ''
+            AND art.DetArt <> 'GNC' -- <--- ESTO QUITA EL PRODUCTO GNC DE LA LISTA
+            AND (
+                -- CASO 1: Si la planilla tiene artículos de PLAYA, mostrar solo PLAYA
+                (
+                    EXISTS (
+                        SELECT 1 FROM AMOVSTOC d2
+                        INNER JOIN ARTICULOS a2 ON d2.ART = a2.CodArt
+                        WHERE d2.PVE = f.SUC AND d2.NCO = f.NCO AND d2.TCO = f.TCO
+                        AND (a2.codSec = 0 AND a2.CodRub = 6 OR a2.DetArt LIKE '%PELOTA%' OR (a2.CodRub = 10 AND d2.ART IN (2,4)))
+                    )
+                    AND (art.codSec = 0 AND art.CodRub = 6 OR art.DetArt LIKE '%PELOTA%' OR (art.CodRub = 10 AND d.ART IN (2,4)))
+                )
+                OR
+                -- CASO 2: Si NO tiene nada de playa, entonces intentar mostrar el resto del Sector 1 Rubro 1
+                (
+                    NOT EXISTS (
+                        SELECT 1 FROM AMOVSTOC d3
+                        INNER JOIN ARTICULOS a3 ON d3.ART = a3.CodArt
+                        INNER JOIN AMAEFACT f3 ON f3.SUC = d3.PVE AND f3.NCO = d3.NCO AND f3.TCO = d3.TCO
+                        WHERE f3.PLA = f.PLA
+                        AND (a3.codSec = 0 AND a3.CodRub = 6 OR a3.DetArt LIKE '%PELOTA%' OR (a3.CodRub = 10 AND d3.ART IN (2,4)))
+                    )
+                    AND (art.codSec = 1 AND art.CodRub = 1)
+                )
+            )
+        ORDER BY f.FEC, f.NCO;
+"""
+
+SQL_PERCEPCION_QUERY = """
+            SELECT
+                f.TCO,
+                CAST(f.SUC AS VARCHAR(5)) + '-' + CAST(f.NCO AS VARCHAR(20)) AS Comprobante,
+                f.TOT AS Total_Factura,
+                f.PER AS Percepcion,
+                v.NomVen AS Nombre_Vendedor
+            FROM AMAEFACT f
+            LEFT JOIN VENDEDORES v
+                ON f.OPE = v.CodVen
+            WHERE f.PLA BETWEEN ? AND ?  -- Corregido para usar el rango
+            AND f.TCO LIKE 'F%'
+            AND f.TIP = 'A'
+            AND f.ANU = ''
+            ORDER BY f.SUC, f.NCO
+            """
+
+SQL_EFECTIVO_QUERY = """
+            SELECT
+                r.PLA AS Planilla,
+                r.NUM AS Nro_Mov,
+                r.OPE AS Operario,
+                v.NomVen AS Vendedor,
+                r.FEC AS Fecha,
+                r.EFE AS Efectivo,
+                r.LUG AS Sector
+            FROM ATURRPA r
+            LEFT JOIN VENDEDORES v
+                ON r.OPE = v.CodVen
+            WHERE r.PLA BETWEEN ? AND ?
+            AND r.LUG = 1
+            ORDER BY v.NomVen, r.FEC
+            """
+
+SQL_REMITO_QUERY = """
+            SELECT
+                f.FEC AS Fecha,
+                f.TCO AS Tipo,
+                CAST(f.SUC AS VARCHAR(5)) + '-' + CAST(f.NCO AS VARCHAR(20)) AS Comprobante,
+                f.NOM AS Cliente,
+                f.TOT AS Total_Remito,
+                v.NomVen AS Nombre_Vendedor
+            FROM AMAEFACT f
+            LEFT JOIN VENDEDORES v ON f.OPE = v.CodVen
+            WHERE f.PLA BETWEEN ? AND ?
+                AND f.TCO = 'RE'
+                AND f.ANU = ''
+            ORDER BY f.FEC, f.SUC, f.NCO
+            """
+
+def fetch_sql_data_thread(d, h, result_queue):
+    try:
+        conn = obtener_conexion_sql(silent=True)
+        if not conn:
+            result_queue.put({"success": False, "error": "No se pudo conectar a la DB"})
+            return
+
+        print("--- CONSULTANDO SQL (THREAD) ---")
+
+        # 1. Efectivo
+        df_efectivo = pd.read_sql(SQL_EFECTIVO_QUERY, conn, params=[d, h])
+
+        # 2. QR
+        df_qr = pd.read_sql(SQL_QR_QUERY, conn, params=(d, h))
+
+        # 3. Facturas
+        df_fact = pd.read_sql(SQL_FACTURAS_QUERY, conn, params=(d, h))
+
+        # 4. Percepcion
+        df_per = pd.read_sql(SQL_PERCEPCION_QUERY, conn, params=(d, h))
+
+        # 5. Remitos
+        df_remito = pd.read_sql(SQL_REMITO_QUERY, conn, params=(d, h))
+
+        conn.close()
+
+        # PROCESS DATA (CPU bound logic moved here)
+
+        # Process QR
+        df_qr["IMPORTE"] = pd.to_numeric(df_qr["IMPORTE"], errors="coerce").fillna(0.0)
+        df_qr["CASHOUT"] = pd.to_numeric(df_qr["CASHOUT"], errors="coerce").fillna(0.0)
+        df_qr["DESC_PROMO_NUM"] = df_qr["DESC_PROMO"].apply(normalizar_desc_promo)
+
+        df_qr = (
+            df_qr
+            .groupby("ID_TRANSACCION", as_index=False)
+            .agg({
+                "Operario": "first",
+                "IMPORTE": "first",
+                "CASHOUT": "first",
+                "DESC_PROMO": "first",
+                "DESC_PROMO_NUM": "sum",
+                "FEC": "first",
+                "ESTADO_QR": "first",
+                "TIP": "first",
+                "TCO": "first",
+                "NCO": "first",
+            })
+        )
+
+        df_qr["QR_FINAL"] = (
+            df_qr["IMPORTE"]
+            + df_qr["CASHOUT"]
+            - df_qr["DESC_PROMO_NUM"]
+        ).round(2)
+
+        # Prepare DATOS_DETALLE_QR dictionary
+        datos_detalle_qr_new = {}
+        for operario in df_qr['Operario'].dropna().unique():
+            df_qr_vendedor = df_qr[df_qr['Operario'] == operario].copy()
+            df_qr_vendedor = df_qr_vendedor[
+                df_qr_vendedor["ESTADO_QR"].isin([
+                    "QR OK",
+                    "QR SIN COMPROBANTE",
+                    "QR COMPROBANTE INEXISTENTE"
+                ])
+            ]
+            if not df_qr_vendedor.empty:
+                df_qr_vendedor = df_qr_vendedor.drop_duplicates(subset=["ID_TRANSACCION"], keep="first")
+                datos_detalle_qr_new[operario] = df_qr_vendedor
+
+        descuentos_qr_new = {}
+        for operario, df in datos_detalle_qr_new.items():
+            descuentos_qr_new[operario] = df["DESC_PROMO_NUM"].sum()
+
+        # Process Facturas (NC Purge)
+        df_nc = df_fact[df_fact['Tipo'].str.contains('NC', na=False)].copy()
+        numeros_anulados = set()
+        for _, row in df_nc.iterrows():
+            try:
+                ref = row['Ref_CPA']
+                if pd.notna(ref):
+                    numeros_anulados.add(int(str(ref).strip()))
+            except:
+                pass
+
+        indices_a_borrar = []
+        for idx, row in df_fact.iterrows():
+            es_nc = 'NC' in str(row['Tipo'])
+            try:
+                numero = int(str(row['Numero']).strip())
+            except:
+                numero = -1
+            if es_nc or numero in numeros_anulados:
+                indices_a_borrar.append(idx)
+
+        df_fact_purged = df_fact.drop(indices_a_borrar)
+
+        datos_detalle_facturacion_new = {}
+        for v_sql in df_fact['Vendedor_Nombre'].unique():
+            datos_detalle_facturacion_new[v_sql] = df_fact_purged[df_fact_purged['Vendedor_Nombre'] == v_sql]
+
+        # Process Percepcion
+        df_per_sum = df_per.groupby('Nombre_Vendedor', dropna=False)['Percepcion'].sum().reset_index()
+
+        # Process Remitos
+        datos_detalle_remitos_new = {}
+        for v_sql in df_remito['Nombre_Vendedor'].dropna().unique():
+            datos_detalle_remitos_new[v_sql] = df_remito[df_remito['Nombre_Vendedor'] == v_sql]
+
+        df_remito_sum = df_remito.groupby('Nombre_Vendedor')['Total_Remito'].sum().reset_index()
+
+        results = {
+            "df_efectivo": df_efectivo,
+            "df_qr": df_qr,
+            "datos_detalle_qr": datos_detalle_qr_new,
+            "descuentos_qr": descuentos_qr_new,
+            "df_fact_purged": df_fact_purged,
+            "datos_detalle_facturacion": datos_detalle_facturacion_new,
+            "df_per_sum": df_per_sum,
+            "datos_detalle_remitos": datos_detalle_remitos_new,
+            "df_remito_sum": df_remito_sum,
+            "df_fact_sum": df_fact_purged.groupby('Vendedor_Nombre')['Total_Neto'].sum().reset_index()
+        }
+
+        result_queue.put({"success": True, "data": results})
+
+    except Exception as e:
+        result_queue.put({"success": False, "error": str(e)})
+        print("ERROR THREAD SQL:", e)
 
 
 # ------------------------------------------------------------
@@ -294,7 +751,7 @@ def recalcular_por_cajas():
             ajustes += DESCUENTOS_QR_POR_VENDEDOR.get(v, 0.0)
 
         diferencia = salida - (entrada - ajustes)
-        
+
         # =========================
         # MOSTRAR SOLO UNA VEZ
         # =========================
@@ -819,7 +1276,7 @@ def guardar_cierre_caja_excel():
     else:
         headers_cta = ["Fecha", "Tipo", "Comprobante", "Cliente", "Total", "Vendedor"]
         aplicar_header(ws_cta, headers_cta)
-        
+
         for df in DATOS_DETALLE_REMITOS.values():
             if df is None or df.empty:
                 continue
@@ -828,7 +1285,7 @@ def guardar_cierre_caja_excel():
                 f_str = pd.to_datetime(r['Fecha']).strftime("%d/%m/%Y %H:%M") if pd.notna(r['Fecha']) else ""
                 # Validar el cliente
                 cli = str(r['Cliente']).strip() if pd.notna(r['Cliente']) and str(r['Cliente']).strip() != "" else "CONSUMIDOR FINAL"
-                
+
                 ws_cta.append([
                     f_str,
                     r.get('Tipo', 'RE'),
@@ -960,7 +1417,7 @@ def abrir_ventana_guardado(root):
 
         # 🔴 cerrar TODA la app
         root.destroy()
-    
+
     tk.Button(
         cont,
         text="Guardar cierre",
@@ -1421,7 +1878,7 @@ def ventana_asignar_qr_sin_comprobante(root, nro_transaccion, fila_qr):
         ANOTACIONES_TMP[-1]["qr_fila"] = None
 
 
-        
+
 
         refrescar_calculo_principal()
         refrescar_anotaciones_ui()
@@ -1568,7 +2025,7 @@ def reconciliar_anotaciones_con_qr():
         if estado != "OK" or fila is None:
             continue
 
-       
+
 
         # 🔴 validar operario
         if not vendedor_qr:
@@ -1577,7 +2034,7 @@ def reconciliar_anotaciones_con_qr():
         # ✅ IMPACTO REAL
         anot["estado"] = ESTADO_QR_IMPACTADO
         anot["qr_fila"] = fila
-    
+
 
 
         aplicar_qr_a_vendedor_desde_anotacion(anot)
@@ -1713,7 +2170,7 @@ def ventana_descontar(root):
     # Descripción
     # -------------------------
     tk.Label(top, text="Descripción").pack(anchor="w", padx=12)
-    
+
 
     txt_desc = tk.Text(
         top,
@@ -1911,7 +2368,7 @@ def refrescar_calculo_principal():
 
     # 🔹 Actualiza total caja conjunta
     if TOTAL_CAJA_CONJUNTA_FN:
-        TOTAL_CAJA_CONJUNTA_FN() 
+        TOTAL_CAJA_CONJUNTA_FN()
 # Llamada a la función global
 if TOTAL_CAJA_CONJUNTA_FN:
     TOTAL_CAJA_CONJUNTA_FN()
@@ -2105,7 +2562,7 @@ def abrir_anotaciones(root):
         width=12,
         command=top.destroy
     ).pack(side="left", padx=5)
-    top.after(120_000,auto_actualizar)   
+    top.after(120_000,auto_actualizar)
 
 
 
@@ -2116,7 +2573,7 @@ def ventana_anotacion_visual(nro_transaccion, root):
     NO afecta conciliación.
     Guarda solo en memoria (ANOTACIONES_TMP).
     """
-    
+
     top = tk.Toplevel(root)
     top.title("Transacción no encontrada")
     top.geometry("520x360")
@@ -2243,7 +2700,7 @@ def ventana_anotacion_visual(nro_transaccion, root):
         # Cerrar ventana
         # -------------------------
         top.destroy()
-       
+
 
     tk.Button(
         frame_btn,
@@ -2261,7 +2718,7 @@ def ventana_anotacion_visual(nro_transaccion, root):
         width=15,
         command=top.destroy
     ).pack(side="left", padx=5)
-    
+
 
 def accion_buscar_transaccion(root):
     if not DATOS_DETALLE_QR:
@@ -2371,7 +2828,7 @@ def ver_editar_rendiciones(vendedor):
     tree.heading("origen", text="Origen")
     tree.heading("tipo", text="Tipo")
     tree.heading("monto", text="Monto")
- 
+
 
     tree.pack(fill="both", expand=True)
 
@@ -2467,7 +2924,7 @@ def abrir_lapiz_efectivo(vendedor):
             iid=str(i),
             values=(m["origen"], m.get("tipo",""), m.get("ref",""), formatear_arg(m["monto"]))
         )
-   
+
 def actualizar_visual_anotaciones():
     for vendedor, lbl in LABELS_ANOTACIONES.items():
         total = sum(
@@ -2839,7 +3296,7 @@ def cargar_responsables_gnc():
     # Limpiamos los nombres y los pasamos a mayúsculas
     df = DF_VENDEDORES_CACHE.copy()
     lista_nombres = df["NomVen"].dropna().str.strip().str.upper().unique().tolist()
-    
+
     return sorted(lista_nombres)
 
 def crear_autocomplete(parent, lista_opciones):
@@ -2987,11 +3444,11 @@ def parse_moneda_robusto(valor):
             return 0.0
         if isinstance(valor, (float, int)):
             return float(valor)
-        
+
         s = str(valor).strip()
         # 🔥 REPARACIÓN: Quitar signo peso y espacios que rompen la matemática
         s = s.replace("$", "").replace(" ", "")
-        
+
         # Caso 1.234,56 (formato europeo/argentino con separador de miles y coma decimal)
         if ',' in s and '.' in s:
             # Si la coma está después del punto, es formato argentino
@@ -3002,7 +3459,7 @@ def parse_moneda_robusto(valor):
         # Caso 1234,56 (formato con coma decimal sin puntos)
         elif ',' in s:
             s = s.replace(",", ".")
-        
+
         return float(s)
     except:
         return 0.0
@@ -3036,7 +3493,7 @@ def son_nombres_similares(excel, db):
 
     return pal_ex.issubset(pal_db)
 
-        
+
     pal_ex, pal_db = set(ex.split()), set(db.split())
     # Similares si un nombre es subconjunto de las palabras del otro.
     return pal_db.issubset(pal_ex) or pal_ex.issubset(pal_db)
@@ -3206,13 +3663,13 @@ def ver_detalle_remitos(vendedor_excel, root):
     global DATOS_DETALLE_REMITOS
     df_vendedor = pd.DataFrame()
     nombre_encontrado = "Desconocido"
-    
+
     for db_name, df in DATOS_DETALLE_REMITOS.items():
         if son_nombres_similares(vendedor_excel, db_name):
             df_vendedor = df
             nombre_encontrado = db_name
             break
-    
+
     if df_vendedor.empty:
         messagebox.showinfo("Sin Datos", f"No hay remitos asignados a: {vendedor_excel}")
         return
@@ -3224,7 +3681,7 @@ def ver_detalle_remitos(vendedor_excel, root):
     # 1. Nuevas columnas
     cols = ("Fecha", "Comprobante", "Cliente", "Vendedor", "Total")
     tree = ttk.Treeview(top, columns=cols, show='headings')
-    
+
     # 2. Configurar anchos y alineaciones para que se vea prolijo
     anchos = {"Fecha": 120, "Comprobante": 120, "Cliente": 250, "Vendedor": 150, "Total": 100}
     for c in cols:
@@ -3235,7 +3692,7 @@ def ver_detalle_remitos(vendedor_excel, root):
 
     scroll = ttk.Scrollbar(top, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scroll.set)
-    
+
     tree.pack(side="left", fill="both", expand=True)
     scroll.pack(side="right", fill="y")
 
@@ -3243,31 +3700,31 @@ def ver_detalle_remitos(vendedor_excel, root):
     for _, row in df_vendedor.iterrows():
         monto = row['Total_Remito']
         total += monto
-        
+
         # Formatear fecha y hora
         fecha_str = pd.to_datetime(row['Fecha']).strftime("%d/%m/%Y %H:%M") if pd.notna(row['Fecha']) else ""
-        
+
         # Si el cliente está vacío, le ponemos Consumidor Final
         cliente = str(row['Cliente']).strip() if pd.notna(row['Cliente']) and str(row['Cliente']).strip() != "" else "CONSUMIDOR FINAL"
-        
+
         vals = (fecha_str, row['Comprobante'], cliente, row['Nombre_Vendedor'], f"${monto:,.2f}")
         tree.insert("", "end", values=vals)
 
-    tk.Label(top, text=f"TOTAL CUENTAS CORRIENTES: ${total:,.2f}", 
+    tk.Label(top, text=f"TOTAL CUENTAS CORRIENTES: ${total:,.2f}",
              font=("Arial", 14, "bold"), bg="#3498db", fg="white").pack(side="bottom", fill="x")
 def ver_detalle_vendedor(vendedor_excel, root):
     """Muestra una ventana Toplevel con el detalle de facturación SQL para un vendedor."""
     global DATOS_DETALLE_FACTURACION
     df_vendedor = pd.DataFrame()
     nombre_encontrado = "Desconocido"
-    
+
     # Buscar el vendedor en los datos cargados por SQL
     for db_name, df in DATOS_DETALLE_FACTURACION.items():
         if son_nombres_similares(vendedor_excel, db_name):
             df_vendedor = df
             nombre_encontrado = db_name
             break
-    
+
     if df_vendedor.empty:
         messagebox.showinfo("Sin Datos", f"No hay datos SQL asignados a: {vendedor_excel}")
         return
@@ -3278,7 +3735,7 @@ def ver_detalle_vendedor(vendedor_excel, root):
 
     cols = ("Fecha", "Tipo", "Numero", "Ref_CPA", "Vendedor_Origen", "Producto", "Total_Neto")
     tree = ttk.Treeview(top, columns=cols, show='headings')
-    
+
     # Configuración de columnas
     for c in cols:
         tree.heading(c, text=c)
@@ -3292,7 +3749,7 @@ def ver_detalle_vendedor(vendedor_excel, root):
     # Scrollbar
     scroll = ttk.Scrollbar(top, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scroll.set)
-    
+
     # Empaquetado
     tree.pack(side="left", fill="both", expand=True)
     scroll.pack(side="right", fill="y")
@@ -3301,10 +3758,10 @@ def ver_detalle_vendedor(vendedor_excel, root):
     for _, row in df_vendedor.iterrows():
         monto = row['Total_Neto']
         total += monto
-        
+
         vals = (
-            row['Fecha'], row['Tipo'], row['Numero'], row['Ref_CPA'], 
-            row['Vendedor_Nombre'], 
+            row['Fecha'], row['Tipo'], row['Numero'], row['Ref_CPA'],
+            row['Vendedor_Nombre'],
             row['Producto'], f"${monto:,.2f}"
         )
         # Etiqueta para colorear NC en rojo
@@ -3317,7 +3774,7 @@ def ver_detalle_vendedor(vendedor_excel, root):
 
     # Etiqueta de total final
     bg = "#27ae60" if total >= 0 else "#c0392b"
-    tk.Label(top, text=f"TOTAL NETO FINAL: ${total:,.2f}", 
+    tk.Label(top, text=f"TOTAL NETO FINAL: ${total:,.2f}",
              font=("Arial", 14, "bold"), bg=bg, fg="white").pack(side="bottom", fill="x")
 
 
@@ -3333,7 +3790,7 @@ def mostrar_planilla(df=None, root=None):
 
 
     frame_cobertura_inner = None
-    
+
     widgets = {}
     def asegurar_fila(vendedor, importe_inicial=0.0, color="#ffffff"):
         vendedor = normalizar_texto(vendedor)
@@ -3441,10 +3898,10 @@ def mostrar_planilla(df=None, root=None):
         # --------- NUEVO: CUENTAS CORRIENTES (Remitos) ---------
         cta_f = tk.Frame(row, bg=color)
         cta_f.pack(side="left", padx=2)
-        
+
         ecta = tk.Entry(cta_f, width=11, justify="center", state="readonly")
         ecta.pack(side="left")
-        
+
         tk.Button(
             cta_f, text="🔍", font=("Arial", 7), bg="#ecf0f1",
             command=lambda x=vendedor: ver_detalle_remitos(x, vent)
@@ -3472,7 +3929,7 @@ def mostrar_planilla(df=None, root=None):
         vend_norm = normalizar_texto(vendedor)
         LABELS_ANOTACIONES[vend_norm] = lbl_anotaciones
 
-        
+
         ee = tk.Entry(
             ef_frame,
             width=11,
@@ -3511,7 +3968,7 @@ def mostrar_planilla(df=None, root=None):
         btn_edit.pack(side="left")
 
 
-        
+
         ld = tk.Label(row, text="0,00", width=12, bg="#f8f9fa", font=("Arial", 9, "bold"))
         ld.pack(side="left", padx=2)
 
@@ -3520,7 +3977,7 @@ def mostrar_planilla(df=None, root=None):
 
         combo = ttk.Combobox(frame_trab, state="disabled", width=18)
         combo.pack(side="left")
-        
+
         tk.Button(
             frame_trab,
             text="Confirmar",
@@ -3609,7 +4066,7 @@ def mostrar_planilla(df=None, root=None):
 
     frame_anotaciones = tk.Frame(frame_bottom, bg=frame_bottom["bg"])
     frame_anotaciones.pack(side="left", padx=6)
-    
+
     btn_anotaciones = tk.Button(
     frame_anotaciones,
     text="📝 Anotaciones",
@@ -3619,7 +4076,7 @@ def mostrar_planilla(df=None, root=None):
     command=lambda: abrir_anotaciones(vent)
     )
     btn_anotaciones.pack(side="left", padx=4)
-    
+
     btn_actualizar = tk.Button(
     frame_anotaciones,
     text="🔄 Actualizar",
@@ -3631,7 +4088,7 @@ def mostrar_planilla(df=None, root=None):
     btn_actualizar.pack(side="left", padx=4)
 
 
-    
+
     # =========================================================
     # PANEL COBERTURA GNC (DERECHA DEL GNC)
     # =========================================================
@@ -3686,12 +4143,12 @@ def mostrar_planilla(df=None, root=None):
     else:
         vendedores = []
 
-    
+
 
 
     # --- Filas de Vendedores ---
     for v in vendedores:
-    
+
         row = tk.Frame(sf, bg="white", bd=1, relief="groove")
         row.pack(fill="x", pady=2)
         tot_ex = df[df['Vendedor'] == v]['Importe'].sum()
@@ -3709,7 +4166,7 @@ def mostrar_planilla(df=None, root=None):
         )
         lbl_base.pack(side="left", padx=2)
 
-        
+
         # QR SQL (Entrada + Botón Detalle)
         qr_f = tk.Frame(row, bg="white")
         qr_f.pack(side="left", padx=2)
@@ -3725,13 +4182,13 @@ def mostrar_planilla(df=None, root=None):
             command=lambda x=v: ver_detalle_qr(x, vent)
         ).pack(side="left")
 
-        
+
         # Productos Facturados (Entrada + Botón Detalle)
         pf_f = tk.Frame(row, bg="white")
         pf_f.pack(side="left", padx=2)
         ep = tk.Entry(pf_f, width=11, justify="center",state="readonly")
         ep.pack(side="left")
-        
+
         # Percepción (solo DB)
         eper = tk.Entry(row, width=12, justify="center")
         eper.pack(side="left", padx=2)
@@ -3741,15 +4198,15 @@ def mostrar_planilla(df=None, root=None):
 
 
         # Se usa lambda con argumento por defecto para capturar el valor correcto de 'v'
-        tk.Button(pf_f, text="🔍", font=("Arial", 7), bg="#ecf0f1", 
+        tk.Button(pf_f, text="🔍", font=("Arial", 7), bg="#ecf0f1",
                  command=lambda x=v: ver_detalle_vendedor(x, vent)).pack(side="left")
 
         # Tarjetas (Entrada)
         et = tk.Entry(row, width=12, justify="center")
         et.pack(side="left", padx=2)
-        
+
         # Efectivo (solo DB)
-     
+
         var_ef = tk.StringVar(value="0,00")
 
         ee = tk.Entry(
@@ -3779,13 +4236,13 @@ def mostrar_planilla(df=None, root=None):
 
         LABELS_ANOTACIONES[v] = lbl_anotaciones
 
-   
+
         # Diferencia (Label de Resultado)
 
         ld = tk.Label(row, text="0,00", width=12, bg="#f8f9fa", font=("Arial", 9, "bold"))
         ld.pack(side="left", padx=2)
 
-        
+
 
 
         # --- ¿Con quién trabajé? (por fila) ---
@@ -3799,7 +4256,7 @@ def mostrar_planilla(df=None, root=None):
             state="readonly"
         )
         combo.pack(side="left")
-        
+
         tk.Button(
             frame_trab,
             text="Confirmar",
@@ -3808,7 +4265,7 @@ def mostrar_planilla(df=None, root=None):
             fg="white",
             command=lambda vend=v, cb=combo: confirmar_trabajo(vend, cb)
         ).pack(side="left", padx=3)
-        
+
         widgets[v] = {"qr": eq, "prod": ep, "tarj": et,"per": eper, "ef": ee, "diff": ld, "base": tot_ex, "base_original": tot_ex,"lbl_base":lbl_base, "gnc_aplicado": False,"caja_id": frozenset([v])
 ,"row":row, "fusionado":False,"combo": combo}
     refrescar_todos_los_combos()
@@ -3856,7 +4313,7 @@ def mostrar_planilla(df=None, root=None):
         nonlocal frame_cobertura_visible
 
         if not frame_cobertura_visible:
-            refrescar_combo_cobertura() 
+            refrescar_combo_cobertura()
             frame_cobertura.pack(
                 side="left",
                 fill="y",
@@ -3879,7 +4336,7 @@ def mostrar_planilla(df=None, root=None):
 ).pack(anchor="w", pady=(5, 10))
 
 
-    
+
 
     tk.Label(
         frame_cobertura,
@@ -3916,7 +4373,7 @@ def mostrar_planilla(df=None, root=None):
         if actual not in valores:
             combo_cobertura.set("")
 
-    
+
     tk.Label(
         frame_cobertura_inner,
         text="Aforadores Cobertura",
@@ -3949,7 +4406,7 @@ def mostrar_planilla(df=None, root=None):
         aforadores_cobertura_entries.append((e_ini, e_fin, lbl_val))
     var_banio_cobertura = tk.BooleanVar()
     # CONTENEDOR INTERNO: aforadores cobertura + baños (MISMA ALTURA)
-    
+
 
 
     frame_banio = tk.Frame(frame_cobertura_row, bg="#ecf0f1")
@@ -4089,7 +4546,7 @@ def mostrar_planilla(df=None, root=None):
         # ================= RESPONSABLE GNC =================
     def agregar_responsable_gnc():
         global RESPONSABLE_GNC_ACTUAL
-        
+
         responsable = normalizar_texto(var_responsable_gnc.get())
 
         if not responsable:
@@ -4104,7 +4561,7 @@ def mostrar_planilla(df=None, root=None):
             )
             return
 
-        total_gnc = GNC_PARA_CAJA 
+        total_gnc = GNC_PARA_CAJA
 
         # ======================================================
         # 1️⃣ SI YA EXISTE → SUMAR GNC
@@ -4120,9 +4577,9 @@ def mostrar_planilla(df=None, root=None):
                     return
 
                 w["gnc_base"] = total_gnc
-           
 
-                
+
+
                 aplicar_coberturas_gnc_a_bases()
 
 
@@ -4144,7 +4601,7 @@ def mostrar_planilla(df=None, root=None):
                 )
                 return
 
-        
+
         # ======================================================
         # 2️⃣ NO EXISTE → CREAR FILA USANDO PIPELINE NORMAL
         # ======================================================
@@ -4196,7 +4653,7 @@ def mostrar_planilla(df=None, root=None):
     responsables_gnc = cargar_responsables_gnc()
     frame_resp = tk.Frame(frame_gnc, bg="#ecf0f1")
     frame_resp.pack(anchor="w", pady=5)
-    
+
 
     frame_auto, var_responsable_gnc = crear_autocomplete(
         frame_resp,
@@ -4220,10 +4677,10 @@ def mostrar_planilla(df=None, root=None):
         font=("Arial", 10, "bold"),
         bg="#ecf0f1"
     ).pack(anchor="w", pady=(10, 2))
-    
+
     # ================= COBERTURA BAÑO =================
-    
-    
+
+
     def calcular_gnc_ui():
         """
         Lee los aforadores GNC desde la UI,
@@ -4261,7 +4718,7 @@ def mostrar_planilla(df=None, root=None):
             text=f"GNC para Caja: ${GNC_PARA_CAJA:,.2f}"
         )
         actualizar_gnc_en_responsable()
-  
+
     tk.Button(
         frame_gnc,
         text="Calcular GNC ⛽",
@@ -4270,12 +4727,12 @@ def mostrar_planilla(df=None, root=None):
         font=("Arial", 10, "bold"),
         command=calcular_gnc_ui
     ).pack(pady=10,  anchor="w")
-    
-    
-    # --- Funciones de Botones ---
-   
 
-    
+
+    # --- Funciones de Botones ---
+
+
+
     tk.Label(
         precio_frame,
         text="Precio GNC ($):",
@@ -4326,15 +4783,15 @@ def mostrar_planilla(df=None, root=None):
     lbl_gnc_caja = tk.Label(frame_gnc, text="GNC para Caja: $0,00",
                             font=("Arial", 10, "bold"), bg="#ecf0f1")
     lbl_gnc_caja.pack(anchor="w")
-    
-   
 
-    
+
+
+
     def consultar_sql_completo():
         """Pide el rango de planillas y ejecuta las consultas SQL de QR y Facturación/NC."""
-        global PLANILLA_DESDE_SQL, PLANILLA_HASTA_SQL 
+        global PLANILLA_DESDE_SQL, PLANILLA_HASTA_SQL
         global DATOS_DETALLE_FACTURACION
-        
+
         root.attributes("-topmost", True)
 
         d = simpledialog.askinteger(
@@ -4358,7 +4815,7 @@ def mostrar_planilla(df=None, root=None):
 
         root.attributes("-topmost", False)
 
-        
+
         messagebox.showinfo("Proceso completado",
                             "QR y total facturado fueron procesados correctamente.")
         PLANILLA_DESDE_SQL = d
@@ -4366,550 +4823,16 @@ def mostrar_planilla(df=None, root=None):
         ejecutar_consulta_sql_con_planillas(d, h)
 
     def ejecutar_consulta_sql_con_planillas(d, h):
-        global DATOS_DETALLE_FACTURACION
-        conn = obtener_conexion_sql()
-        if not conn:
-            return
-        
-        global DATOS_DETALLE_FACTURACION
-        DATOS_DETALLE_FACTURACION = {}
+        if sf_global and sf_global.winfo_toplevel():
+            sf_global.winfo_toplevel().config(cursor="wait")
 
-        try:
-            # Consulta QR (Sin cambios)
-          #  sql_qr = """
-           # WITH Piezas AS (
-            #    SELECT COALESCE(v1.NOMVEN, v2.NOMVEN, 'ID: ' + CAST(af.OPE AS VARCHAR)) AS Operario,
-             #   TRY_CAST(REPLACE(REPLACE(A.IMPORTE, '.', ''), ',', '.') AS DECIMAL(18,2))/100 AS Neto,
-              #  TRY_CAST(REPLACE(REPLACE(ISNULL(A.CASHOUT, '0'), '.', ''), ',', '.') AS DECIMAL(18,2))/100 AS Cash
-               # FROM A_MERCADOPAGO A
-                #JOIN AMAEFACT_EXT C ON A.CAR = C.ID_COMPV2
-                #JOIN amaefact af ON af.SUC = C.SUC AND af.NCO = C.NCO AND af.TIP = C.TIP AND af.TCO = C.TCO
-               # LEFT JOIN VENDEDORES v1 ON af.VEN = v1.CODVEN
-               # LEFT JOIN VENDEDORES v2 ON af.OPE = v2.CODVEN
-               # WHERE A.PLA BETWEEN ? AND ? AND A.Est IN ('1', '11', '12')
-           # )
-           # SELECT Operario, SUM(Neto) + SUM(Cash) as Total FROM Piezas GROUP BY Operario
-           # """
-            
-            # Consulta FACTURACIÓN + NC (CORREGIDA)
-            sql_qr = """
-            ;WITH QR_BASE AS (
-    SELECT
-        A.PLA AS Planilla,
+        result_queue = queue.Queue()
 
-        COALESCE(v2.NOMVEN, v1.NOMVEN, 'SIN OPERARIO') AS Operario,
+        t = threading.Thread(target=fetch_sql_data_thread, args=(d, h, result_queue))
+        t.start()
 
-        A.NTRANS AS ID_TRANSACCION,
-
-        CAST(REPLACE(A.IMPORTE, ',', '.') AS DECIMAL(18,2)) AS IMPORTE,
-        CAST(REPLACE(ISNULL(A.CASHOUT, '0'), ',', '.') AS DECIMAL(18,2)) AS CASHOUT,
-
-        A.RED_DES AS DESC_PROMO,
-        CAST(REPLACE(ISNULL(A.RED_TOT,'0'), ',', '.') AS DECIMAL(18,2)) AS DESCUENTO_TOTAL,
-
-        A.FEC,
-        A.ORI,
-        A.LUG,
-        A.EST AS EST_MP,
-
-        A.CAR AS ID_COMPV2,
-        af.TIP,
-        af.TCO,
-        af.NCO
-    FROM A_MERCADOPAGO A
-    LEFT JOIN AMAEFACT_EXT C
-        ON A.CAR = C.ID_COMPV2
-    LEFT JOIN AMAEFACT af
-        ON af.SUC = C.SUC
-       AND af.NCO = C.NCO
-       AND af.TIP = C.TIP
-       AND af.TCO = C.TCO
-    LEFT JOIN VENDEDORES v1 ON af.VEN = v1.CODVEN
-    LEFT JOIN VENDEDORES v2 ON af.OPE = v2.CODVEN
-    WHERE
-        A.PLA BETWEEN ? AND ?
-        OR A.LUG = 5
-        AND A.LUG = 1
-        AND A.EST = 1
-),
-
--- 🔹 Depuración de duplicados: nos quedamos solo con el “real”
-QR_DEPURADO AS (
-    SELECT *,
-           ROW_NUMBER() OVER (
-               PARTITION BY ID_COMPV2
-               ORDER BY NCO DESC
-           ) AS rn
-    FROM QR_BASE
-),
-
--- 🔹 Clasificación final de QR
-QR_CLASIFICADO AS (
-    SELECT *,
-        CASE
-            WHEN ID_COMPV2 IS NULL THEN 'QR SIN COMPROBANTE'
-            WHEN NCO IS NULL THEN 'QR COMPROBANTE INEXISTENTE'
-            ELSE 'QR OK'
-        END AS ESTADO_QR,
-        ROUND(IMPORTE + CASHOUT - DESCUENTO_TOTAL, 2) AS QR_NETO_FINAL
-    FROM QR_DEPURADO
-    WHERE rn = 1 -- elimina duplicados/fantasmas
-)
-
--- =========================
--- DETALLE POR VENDEDOR
--- =========================
-SELECT
-    Planilla,
-    Operario,
-    ESTADO_QR,
-    ID_TRANSACCION,
-    IMPORTE,
-    CASHOUT,
-    DESC_PROMO,
-    DESCUENTO_TOTAL,
-    QR_NETO_FINAL,
-    FEC,
-    TIP,
-    TCO,
-    NCO
-FROM QR_CLASIFICADO
-ORDER BY
-    Operario,
-    FEC;
-
-
-
-
-                    """
-
-
-            sql_facturas = """
-                                SELECT 
-            f.FEC AS Fecha,
-            f.TCO AS Tipo,
-            f.NCO AS Numero,
-            f.CPA AS Ref_CPA,
-            COALESCE(v_origen.NomVen, v_actual.NomVen, 'DESCONOCIDO') AS Vendedor_Nombre,
-            art.DetArt AS Producto,
-            CAST(d.CAN AS DECIMAL(18,2)) AS Cantidad,
-            CASE 
-                WHEN f.TCO LIKE '%NC%' THEN 
-                    (CAST(d.CAN AS DECIMAL(18,2)) * -1) * CAST(art.PreVen AS DECIMAL(18,2))
-                ELSE 
-                    CAST(d.CAN AS DECIMAL(18,2)) * CAST(art.PreVen AS DECIMAL(18,2))
-            END AS Total_Neto
-        FROM AMAEFACT f
-        INNER JOIN AMOVSTOC d 
-            ON f.SUC = d.PVE AND f.NCO = d.NCO 
-            AND f.TIP = d.TIP AND f.TCO = d.TCO
-        INNER JOIN ARTICULOS art ON d.ART = art.CodArt
-        LEFT JOIN AMAEFACT f_origen 
-            ON f.SUC = f_origen.SUC 
-            AND f.TCO LIKE '%NC%'
-            AND f_origen.TCO NOT LIKE '%NC%'
-            AND TRY_CAST(f.CPA AS BIGINT) = f_origen.NCO
-        LEFT JOIN VENDEDORES v_origen ON f_origen.OPE = v_origen.CodVen
-        LEFT JOIN VENDEDORES v_actual ON f.OPE = v_actual.CodVen
-        WHERE f.PLA BETWEEN ? AND ?-- Filtro de planilla
-            AND f.ANU = ''    
-            AND art.DetArt <> 'GNC' -- <--- ESTO QUITA EL PRODUCTO GNC DE LA LISTA
-            AND (
-                -- CASO 1: Si la planilla tiene artículos de PLAYA, mostrar solo PLAYA
-                (
-                    EXISTS (
-                        SELECT 1 FROM AMOVSTOC d2 
-                        INNER JOIN ARTICULOS a2 ON d2.ART = a2.CodArt
-                        WHERE d2.PVE = f.SUC AND d2.NCO = f.NCO AND d2.TCO = f.TCO
-                        AND (a2.codSec = 0 AND a2.CodRub = 6 OR a2.DetArt LIKE '%PELOTA%' OR (a2.CodRub = 10 AND d2.ART IN (2,4)))
-                    )
-                    AND (art.codSec = 0 AND art.CodRub = 6 OR art.DetArt LIKE '%PELOTA%' OR (art.CodRub = 10 AND d.ART IN (2,4)))
-                )
-                OR 
-                -- CASO 2: Si NO tiene nada de playa, entonces intentar mostrar el resto del Sector 1 Rubro 1
-                (
-                    NOT EXISTS (
-                        SELECT 1 FROM AMOVSTOC d3 
-                        INNER JOIN ARTICULOS a3 ON d3.ART = a3.CodArt
-                        INNER JOIN AMAEFACT f3 ON f3.SUC = d3.PVE AND f3.NCO = d3.NCO AND f3.TCO = d3.TCO
-                        WHERE f3.PLA = f.PLA
-                        AND (a3.codSec = 0 AND a3.CodRub = 6 OR a3.DetArt LIKE '%PELOTA%' OR (a3.CodRub = 10 AND d3.ART IN (2,4)))
-                    )
-                    AND (art.codSec = 1 AND art.CodRub = 1)
-                )
-            )
-        ORDER BY f.FEC, f.NCO;
-        """
-            sql_percepcion = """
-            SELECT
-                f.TCO,
-                CAST(f.SUC AS VARCHAR(5)) + '-' + CAST(f.NCO AS VARCHAR(20)) AS Comprobante,
-                f.TOT AS Total_Factura,
-                f.PER AS Percepcion,
-                v.NomVen AS Nombre_Vendedor
-            FROM AMAEFACT f
-            LEFT JOIN VENDEDORES v
-                ON f.OPE = v.CodVen
-            WHERE f.PLA BETWEEN ? AND ?  -- Corregido para usar el rango
-            AND f.TCO LIKE 'F%'
-            AND f.TIP = 'A'
-            AND f.ANU = ''
-            ORDER BY f.SUC, f.NCO
-            """
-            sql_efectivo = """
-            SELECT
-                r.PLA AS Planilla,
-                r.NUM AS Nro_Mov,
-                r.OPE AS Operario,
-                v.NomVen AS Vendedor,
-                r.FEC AS Fecha,
-                r.EFE AS Efectivo,
-                r.LUG AS Sector
-            FROM ATURRPA r
-            LEFT JOIN VENDEDORES v
-                ON r.OPE = v.CodVen
-            WHERE r.PLA BETWEEN ? AND ?
-            AND r.LUG = 1
-            ORDER BY v.NomVen, r.FEC
-            """
-            sql_remito = """
-            SELECT
-                f.FEC AS Fecha,
-                f.TCO AS Tipo,
-                CAST(f.SUC AS VARCHAR(5)) + '-' + CAST(f.NCO AS VARCHAR(20)) AS Comprobante,
-                f.NOM AS Cliente,
-                f.TOT AS Total_Remito,
-                v.NomVen AS Nombre_Vendedor
-            FROM AMAEFACT f
-            LEFT JOIN VENDEDORES v ON f.OPE = v.CodVen
-            WHERE f.PLA BETWEEN ? AND ?
-                AND f.TCO = 'RE'
-                AND f.ANU = ''
-            ORDER BY f.FEC, f.SUC, f.NCO
-            """
-
-
-            df_efectivo = pd.read_sql(
-                sql_efectivo,
-                conn,
-                params=[d, h]
-            )
-           
-
-            global DF_GNC_SQL_CACHE
-            DF_GNC_SQL_CACHE = df_efectivo.copy()
-
-            
-
-            print("--- CONSULTANDO SQL ---")
-            df_qr = pd.read_sql(sql_qr, conn, params=(d, h))
-
-            # =========================
-            # NORMALIZAR NUMÉRICOS
-            # =========================
-            df_qr["IMPORTE"] = pd.to_numeric(df_qr["IMPORTE"], errors="coerce").fillna(0.0)
-            df_qr["CASHOUT"] = pd.to_numeric(df_qr["CASHOUT"], errors="coerce").fillna(0.0)
-
-            # =========================
-            # NORMALIZAR PROMO (🔥 CLAVE)
-            # =========================
-            
-
-            df_qr["DESC_PROMO_NUM"] = df_qr["DESC_PROMO"].apply(normalizar_desc_promo)
-            df_qr = (
-            df_qr
-            .groupby("ID_TRANSACCION", as_index=False)
-            .agg({
-                "Operario": "first",
-                "IMPORTE": "first",
-                "CASHOUT": "first",
-                "DESC_PROMO": "first",
-                "DESC_PROMO_NUM": "sum",   # 🔥 SUMA REAL
-                "FEC": "first",
-                "ESTADO_QR": "first",
-                "TIP": "first",
-                "TCO": "first",
-                "NCO": "first",
-            })
-        )
-            # =========================
-            # DEBUG PROMOS
-            # =========================
-           
-
-
-            df_dbg = df_qr[df_qr["DESC_PROMO_NUM"] > 0][
-                    ["Operario", "IMPORTE", "CASHOUT", "DESC_PROMO_NUM"]
-                ]
-
-           
-            print(
-                df_qr[df_qr["DESC_PROMO_NUM"] > 0][
-                    ["ID_TRANSACCION", "IMPORTE", "DESC_PROMO_NUM"]
-                ].head(10)
-            )
-
-
-
-            print("=== DEBUG PROMOS ===")
-            print(df_dbg.head(20))
-            print("MAX PROMO:", df_dbg["DESC_PROMO_NUM"].max())
-            print("MIN PROMO:", df_dbg["DESC_PROMO_NUM"].min())
-            
-            # =========================
-            # CÁLCULO FINAL QR
-            # =========================
-            df_qr["QR_FINAL"] = (
-                df_qr["IMPORTE"]
-                + df_qr["CASHOUT"]
-                - df_qr["DESC_PROMO_NUM"]
-            ).round(2)
-
-            total_qr = round(df_qr["QR_FINAL"].sum(), 2)
-
-            # =========================
-            # GUARDAR DETALLE QR
-            # =========================
-            DF_RENDICIONES_CACHE = pd.read_sql(sql_efectivo, conn, params=(d, h))
-            # =========================
-            # LIMPIAR EFECTIVO SQL PREVIO (IDEMPOTENCIA)
-            # =========================
-            for vend in DATOS_RENDICIONES:
-                if 'movimientos' in DATOS_RENDICIONES[vend]:
-                    DATOS_RENDICIONES[vend]['movimientos'] = [
-                        m for m in DATOS_RENDICIONES[vend]['movimientos']
-                        if m.get('origen') != 'sql'
-        ]
-
-            # =========================
-            # CARGAR EFECTIVO SQL A MOVIMIENTOS
-            # =========================
-            for _, row in DF_RENDICIONES_CACHE.iterrows():
-                vendedor_sql = str(row['Vendedor']).strip().upper()
-                monto = parse_moneda_robusto(row['Efectivo'])
-
-                for vend_ui in widgets.keys():
-                    if son_nombres_similares(vend_ui, vendedor_sql):
-                        DATOS_RENDICIONES.setdefault(vend_ui, {}).setdefault('movimientos', []).append({
-                            'origen': 'sql',
-                            'planilla': row['Planilla'],
-                            'nro': row['Nro_Mov'],
-                            'tipo': 'Efectivo',
-                            'ref': f"Mov {row['Nro_Mov']} - {row['Fecha']:%d/%m %H:%M}",
-                            'monto': float(monto)
-                        })
-                        break
-
-            DATOS_DETALLE_QR.clear()
-            refrescar_efectivos_ui()
-            
-            DATOS_DETALLE_QR.clear()
-
-            for operario in df_qr['Operario'].dropna().unique():
-
-               # 1️⃣ Crear df del operario
-                df_qr_vendedor = df_qr[df_qr['Operario'] == operario].copy()
-
-                # 2️⃣ Mantener QR OK y QR SIN COMPROBANTE
-                df_qr_vendedor = df_qr_vendedor[
-                    df_qr_vendedor["ESTADO_QR"].isin([
-                        "QR OK",
-                        "QR SIN COMPROBANTE",
-                        "QR COMPROBANTE INEXISTENTE"
-                    ])
-                ]
-                
-                # 3️⃣ Solo guardar si quedó algo
-                if not df_qr_vendedor.empty:
-
-                    # 🔒 evitar duplicar la misma transacción QR
-                    df_qr_vendedor = df_qr_vendedor.drop_duplicates(
-                        subset=["ID_TRANSACCION"],
-                        keep="first"
-                    )
-
-                    DATOS_DETALLE_QR[operario] = df_qr_vendedor
-
-
-            global DESCUENTOS_QR_POR_VENDEDOR
-            DESCUENTOS_QR_POR_VENDEDOR = {}
-            for operario, df in DATOS_DETALLE_QR.items():
-               DESCUENTOS_QR_POR_VENDEDOR[operario] = df["DESC_PROMO_NUM"].sum()
-            # =========================
-            # CREAR ÍNDICE DE QR (para anotaciones)
-            # =========================
-            INDICE_QR = {}
-
-            for operario, df in DATOS_DETALLE_QR.items():
-                for _, row in df.iterrows():
-
-                    # indexar por ID_TRANSACCION
-                    if pd.notna(row.get("ID_TRANSACCION")):
-                        INDICE_QR[str(row["ID_TRANSACCION"])] = {
-                            "operario_original": operario,
-                            "qr_row": row
-                        }
-
-                    # indexar por NCO (si existe)
-                    if pd.notna(row.get("NCO")):
-                        INDICE_QR[str(row["NCO"])] = {
-                            "operario_original": operario,
-                            "qr_row": row
-                        }
-
-
-            # =========================
-            # INYECTAR QR EN CAJAS
-            # =========================
-            for vendedor_sql, df in DATOS_DETALLE_QR.items():
-                total_qr = round(df["QR_FINAL"].sum(), 2)
-
-
-
-
-                for vend_ui, w in widgets.items():
-                    if son_nombres_similares(vend_ui, vendedor_sql):
-
-                        # 🔹 valor lógico para el cálculo
-                        w["qr_db"] = total_qr
-
-                        # 🔹 reflejo visual
-                        eq = w["qr"]
-                        eq.config(state="normal")
-                        eq.delete(0, tk.END)
-                        eq.insert(0, f"{total_qr:.2f}")
-                        eq.config(state="disabled")
-
-                        break
-
-            df_fact = pd.read_sql(sql_facturas, conn, params=(d, h))
-            
-            # La consulta de percepciones debe usar el rango, no solo el 'desde' (d)
-            df_per = pd.read_sql(sql_percepcion, conn, params=(d, h)) 
-            
-            # Creación de df_per_sum (esto es vital y ahora está ANTES de usarse)
-            df_per_sum = (
-                df_per
-                .groupby('Nombre_Vendedor', dropna=False)['Percepcion']
-                .sum()
-                .reset_index()
-            )
-
-            # EJECUTAR CONSULTA REMITOS
-            df_remito = pd.read_sql(sql_remito, conn, params=(d, h))
-            DATOS_DETALLE_REMITOS.clear()
-
-            # Guardar df por vendedor
-            for v_sql in df_remito['Nombre_Vendedor'].dropna().unique():
-                DATOS_DETALLE_REMITOS[v_sql] = df_remito[df_remito['Nombre_Vendedor'] == v_sql]
-
-            # Sumarizar e inyectar en la UI
-            df_remito_sum = df_remito.groupby('Nombre_Vendedor')['Total_Remito'].sum().reset_index()
-            
-            for _, r in df_remito_sum.iterrows():
-                nom_sql = r['Nombre_Vendedor']
-                monto = r['Total_Remito']
-                
-                for v_ex, w in widgets.items():
-                    if son_nombres_similares(v_ex, nom_sql):
-                        w['cta_cte'].config(state="normal")
-                        w['cta_cte'].delete(0, tk.END)
-                        w['cta_cte'].insert(0, f"{monto:.2f}")
-                        w['cta_cte'].config(state="readonly")
-            conn.close()
-            
-            # ---------------------------------------------------------
-            # PURGA GLOBAL DE NC + FACTURAS ANULADAS (POR NUMERO)
-            # ---------------------------------------------------------
-            # ... (Toda la lógica de purga se mantiene igual)
-
-            # 1. Detectar Notas de Crédito
-            df_nc = df_fact[df_fact['Tipo'].str.contains('NC', na=False)].copy()
-
-            # 2. Obtener todos los números de comprobantes anulados desde Ref_CPA
-            numeros_anulados = set()
-
-            for _, row in df_nc.iterrows():
-                try:
-                    ref = row['Ref_CPA']
-                    if pd.notna(ref):
-                        ref_num = int(str(ref).strip())
-                        numeros_anulados.add(ref_num)
-                except:
-                    pass
-
-            print(f"Comprobantes anulados detectados: {numeros_anulados}")
-
-            # 3. Eliminar
-            indices_a_borrar = []
-
-            for idx, row in df_fact.iterrows():
-                es_nc = 'NC' in str(row['Tipo'])
-                try:
-                    numero = int(str(row['Numero']).strip())
-                except:
-                    numero = -1
-
-                if es_nc or numero in numeros_anulados:
-                    indices_a_borrar.append(idx)
-
-            df_fact = df_fact.drop(indices_a_borrar)
-            DATOS_PRODUCTOS_FACTURADOS = df_fact.copy()
-            print(f"Filas luego de purga NC: {len(df_fact)}")
-
-            # ... (Debugging)
-            print(f"Total filas encontradas: {len(df_fact)}")
-            
-            ncs_check = df_fact[df_fact['Tipo'].str.contains('NC', na=False)]
-            if not ncs_check.empty:
-                print(f"\n¡SE ENCONTRARON {len(ncs_check)} NOTAS DE CRÉDITO!")
-                print("Mira a quién se asignaron:")
-                print(ncs_check[['Fecha', 'Numero', 'Ref_CPA', 'Vendedor_Nombre', 'Total_Neto']])
-            else:
-                print("\nNO se encontraron Notas de Crédito en este rango de planillas.")
-
-            # 1. Llenar QR
-           # c_qr = 0
-           # for _, r in df_qr.iterrows():
-           #     for v_ex, w in widgets.items():
-            #        if son_nombres_similares(v_ex, r['Operario']):
-             #           w['qr'].delete(0, tk.END)
-              #          w['qr'].insert(0, f"{r['Total']:.2f}")
-               #         c_qr += 1
-            
-
-
-            # 2. Llenar Percepción (USANDO df_per_sum, que ya existe)
-            for _, r in df_per_sum.iterrows():
-                nom_sql = r['Nombre_Vendedor']
-                monto = parse_moneda_robusto(r['Percepcion'])
-
-                for v_ex, w in widgets.items():
-                    if son_nombres_similares(v_ex, nom_sql):
-                        w['per'].delete(0, tk.END)
-                        w['per'].insert(0, f"{monto:.2f}")
-            
-            # 3. Llenar Facturación (Productos)
-            for v_sql in df_fact['Vendedor_Nombre'].unique():
-                DATOS_DETALLE_FACTURACION[v_sql] = df_fact[df_fact['Vendedor_Nombre'] == v_sql]
-
-            df_sumas = df_fact.groupby('Vendedor_Nombre')['Total_Neto'].sum().reset_index()
-            
-            c_fact = 0
-            for _, r in df_sumas.iterrows():
-                nom_sql = r['Vendedor_Nombre']
-                monto = r['Total_Neto']
-                
-                for v_ex, w in widgets.items():
-                    if son_nombres_similares(v_ex, nom_sql):
-                        w['prod'].delete(0, tk.END)
-                        w['prod'].insert(0, f"{monto:.2f}")
-                        c_fact += 1
-         
-    
-        except Exception as e:
-            messagebox.showerror("Error SQL", str(e))
-            print("ERROR FATAL:", e)
+        # Schedule check
+        process_sql_results(result_queue)
 
     CONSULTAR_SQL_HANDLER = consultar_sql_completo
     EJECUTAR_SQL_HANDLER = ejecutar_consulta_sql_con_planillas
@@ -5019,8 +4942,8 @@ ORDER BY
         # 🔹 TOTAL CAJA CONJUNTA (UNA SOLA VEZ)
         # =========================
         if TOTAL_CAJA_CONJUNTA_FN:
-            TOTAL_CAJA_CONJUNTA_FN()    
-            
+            TOTAL_CAJA_CONJUNTA_FN()
+
         global ACTUALIZAR_DIFERENCIAS_FN
         ACTUALIZAR_DIFERENCIAS_FN = actualizar_diferencias_ui
     CALCULAR_HANDLER = calcular
@@ -5111,15 +5034,15 @@ ORDER BY
         command=reiniciar_interfaz_ui
     ).pack(side="left", padx=20)
 
-    
 
-        
-    tk.Button(bf, text="Consultar SQL 🔄", bg="#8e44ad", fg="white", 
+
+
+    tk.Button(bf, text="Consultar SQL 🔄", bg="#8e44ad", fg="white",
               font=("Arial", 10,"bold"), command=consultar_sql_completo).pack(side="left", padx=20)
-              
-    tk.Button(bf, text="Calcular 🧮", bg="#3498db", fg="white", 
+
+    tk.Button(bf, text="Calcular 🧮", bg="#3498db", fg="white",
               font=("Arial", 10,"bold"), command=calcular).pack(side="left", padx=20)
-    
+
     tk.Button(
     bf,
     text="Guardar Cierre 💾",
@@ -5129,7 +5052,7 @@ ORDER BY
     relief="raised",
     command=lambda:abrir_ventana_guardado(root)
 ).pack(side="left", padx=20)
-    
+
 
 
 
@@ -5184,22 +5107,22 @@ def validar_licencia():
     # ----------------------------------------------------
     # 🔥 CONFIGURA TU FECHA DE CADUCIDAD AQUÍ (Año, Mes, Día)
     # ----------------------------------------------------
-    fecha_caducidad = datetime(2027, 2, 19) 
-    
+    fecha_caducidad = datetime(2027, 2, 19)
+
     fecha_actual = obtener_fecha_internet()
-    
+
     # ¿Qué pasa si justo se corta el internet en la estación?
     # Usamos la hora local como "salvavidas" temporal para que puedan cerrar la caja igual.
     if not fecha_actual:
         fecha_actual = datetime.now()
-        
+
     if fecha_actual > fecha_caducidad:
         import tkinter as tk
         from tkinter import messagebox
         root = tk.Tk()
         root.withdraw() # Oculta la ventana principal
         messagebox.showerror(
-            "Licencia Expirada", 
+            "Licencia Expirada",
             "El período de uso de este sistema ha finalizado.\n"
             "Por favor, contacte al administrador o desarrollador para renovar la licencia."
         )
