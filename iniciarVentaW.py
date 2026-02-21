@@ -503,22 +503,22 @@ def ver_detalle_qr_caja(vendedor_excel, root):
     tree.pack(fill="both", expand=True, padx=5, pady=5)
 
     total_interfaz = 0.0
-    for _, r in df_qr.iterrows():
-        fecha = pd.to_datetime(r["FEC"]).strftime("%d/%m/%Y %H:%M")
+    for r in df_qr.itertuples(index=False):
+        fecha = pd.to_datetime(r.FEC).strftime("%d/%m/%Y %H:%M")
         tree.insert(
             "",
             "end",
             values=(
-                r["COMPROBANTE_TXT"],
+                r.COMPROBANTE_TXT,
                 fecha,
-                formatear_moneda_ui(r["IMPORTE"]),
-                formatear_moneda_ui(r["CASHOUT"]),
-                formatear_moneda_ui(r["DESC_PROMO_NUM"]),
-                formatear_moneda_ui(r["QR_FINAL"]),
-                r["ID_TRANSACCION"]
+                formatear_moneda_ui(r.IMPORTE),
+                formatear_moneda_ui(r.CASHOUT),
+                formatear_moneda_ui(r.DESC_PROMO_NUM),
+                formatear_moneda_ui(r.QR_FINAL),
+                r.ID_TRANSACCION
             )
         )
-        total_interfaz += float(r["QR_FINAL"])
+        total_interfaz += float(r.QR_FINAL)
 
     tk.Label(
         top,
