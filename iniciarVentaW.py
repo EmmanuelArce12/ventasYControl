@@ -7,6 +7,7 @@ import copy
 import os
 import urllib.request
 import sys
+from functools import lru_cache
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -2879,12 +2880,18 @@ def recalcular_gnc(
 
 
 
+@lru_cache(maxsize=4096)
 def normalizar_texto(texto):
     """Limpia el texto, elimina prefijos numerados y lo convierte a mayúsculas."""
     if not texto or str(texto).lower() == 'nan':
         return ""
     # Elimina patrones como "1 - " o "23-"
     return re.sub(r'^\d+\s*-\s*', '', str(texto)).strip().upper()
+
+
+@lru_cache(maxsize=4096)
+def obtener_palabras_cached(texto_norm):
+    return set(texto_norm.split())
 
 def parse_moneda_robusto(valor):
     """Convierte un valor de texto o numérico a float, limpiando símbolos como el $."""
@@ -2927,8 +2934,8 @@ def son_nombres_similares(excel, db):
     if not ex or not db:
         return False
 
-    pal_ex = set(ex.split())
-    pal_db = set(db.split())
+    pal_ex = obtener_palabras_cached(ex)
+    pal_db = obtener_palabras_cached(db)
 
     # 🔧 FORZAR: si DB es subconjunto del Excel → MATCH
     if pal_db.issubset(pal_ex):
@@ -2939,13 +2946,7 @@ def son_nombres_similares(excel, db):
         if "VELAZQUEZ" in db and "VELAZQUEZ" in ex:
             return True
         return False
-
     return pal_ex.issubset(pal_db)
-
-        
-    pal_ex, pal_db = set(ex.split()), set(db.split())
-    # Similares si un nombre es subconjunto de las palabras del otro.
-    return pal_db.issubset(pal_ex) or pal_ex.issubset(pal_db)
 
 
 # ------------------------------------------------------------
