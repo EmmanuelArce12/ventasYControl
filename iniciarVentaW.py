@@ -2950,6 +2950,52 @@ def son_nombres_similares(excel, db):
 # ------------------------------------------------------------
 # 3. VENTANA DETALLE (LUPA)
 # ------------------------------------------------------------
+def obtener_qr_consolidado(vendedores_a_buscar):
+    """
+    Busca y consolida DataFrames de QR para uno o varios vendedores.
+    Maneja búsqueda exacta y difusa.
+    Retorna (df_consolidado, nombre_encontrado_str).
+    """
+    dfs = []
+    nombres_encontrados = set()
+
+    # Asegurar que sea iterable (lista o set)
+    if isinstance(vendedores_a_buscar, str):
+        vendedores_a_buscar = [vendedores_a_buscar]
+
+    for vendedor in vendedores_a_buscar:
+        df_parcial = pd.DataFrame()
+        nombre_parcial = None
+
+        # 1. Búsqueda exacta (rápida)
+        if vendedor in DATOS_DETALLE_QR:
+            df_parcial = DATOS_DETALLE_QR[vendedor]
+            nombre_parcial = vendedor
+        else:
+            # 2. Búsqueda difusa
+            for db_name, df in DATOS_DETALLE_QR.items():
+                if son_nombres_similares(vendedor, db_name):
+                    df_parcial = df
+                    nombre_parcial = db_name
+                    break
+
+        if df_parcial is not None and not df_parcial.empty:
+            dfs.append(df_parcial)
+            if nombre_parcial:
+                nombres_encontrados.add(nombre_parcial)
+
+    if not dfs:
+        return pd.DataFrame(), "Desconocido"
+
+    df_final = pd.concat(dfs, ignore_index=True)
+
+    # Evitar duplicados de transacciones si hubo superposición
+    if "ID_TRANSACCION" in df_final.columns:
+        df_final = df_final.drop_duplicates(subset="ID_TRANSACCION")
+
+    nombre_final = " + ".join(sorted(nombres_encontrados))
+    return df_final, nombre_final
+
 def ver_detalle_qr(vendedor_excel, root, reasignado=False):
     global DATOS_DETALLE_QR
     global TRANSACCION_QR_BUSCADA
@@ -2958,26 +3004,19 @@ def ver_detalle_qr(vendedor_excel, root, reasignado=False):
     nombre_encontrado = "Desconocido"
 
     # -------------------------
-    # 0. Check for Unified Box (New Logic)
+    # 1. Obtener datos (Unified or Standard)
     # -------------------------
-    es_caja_unificada = False
     w = widgets.get(vendedor_excel)
-    if w and isinstance(w.get("caja_id"), frozenset) and len(w["caja_id"]) > 1:
-        es_caja_unificada = True
-        datos = obtener_datos_caja(vendedor_excel)
-        if datos and datos["qr"] is not None and not datos["qr"].empty:
-            df_qr = datos["qr"].copy()
-            nombre_encontrado = "CAJA UNIFICADA"
 
-    # -------------------------
-    # 1. Buscar vendedor en cache QR (Fallback / Standard)
-    # -------------------------
-    if df_qr.empty and not es_caja_unificada:
-        for db_name, df in DATOS_DETALLE_QR.items():
-            if son_nombres_similares(vendedor_excel, db_name):
-                df_qr = df.copy()
-                nombre_encontrado = db_name
-                break
+    # Determinar lista de vendedores a buscar
+    vendedores_a_buscar = [vendedor_excel]
+    es_caja_unificada = False
+
+    if w and isinstance(w.get("caja_id"), frozenset) and len(w["caja_id"]) > 1:
+        vendedores_a_buscar = list(w["caja_id"])
+        es_caja_unificada = True
+
+    df_qr, nombre_encontrado = obtener_qr_consolidado(vendedores_a_buscar)
 
     if df_qr.empty:
         msg = f"No hay transacciones QR para la caja de: {vendedor_excel}" if es_caja_unificada else f"No hay transacciones QR para: {vendedor_excel}"
