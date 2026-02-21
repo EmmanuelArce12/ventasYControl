@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import pyodbc
 import re
+from random import randint
 import copy
 import os
 import urllib.request
@@ -494,7 +495,6 @@ def observaciones_descontar_por_vendedor(vendedor):
     return "; ".join(textos)
 
 
-from datetime import datetime
 def observaciones_completas_por_vendedor(vendedor):
     textos = []
 
@@ -526,11 +526,6 @@ def obtener_turno_actual():
         return "Turno_Tarde"
     else:
         return None  # no se guarda
-from openpyxl import Workbook
-from openpyxl.styles import Font
-from datetime import datetime
-import os
-from tkinter import messagebox
 
 def guardar_cierre_caja_excel():
     global TURNO_SELECCIONADO, widgets
@@ -771,9 +766,6 @@ def on_cerrar_programa(root):
     return
 
 
-import tkinter as tk
-from tkinter import ttk, messagebox
-from datetime import datetime
 
 
 def abrir_ventana_guardado(root):
@@ -942,7 +934,6 @@ def eliminar_transaccion_seleccionada():
         f"La transacción {nro_transaccion} fue eliminada correctamente."
     )
 
-import re
 
 
 def normalizar_desc_promo(texto):
@@ -1001,8 +992,6 @@ def limpiar_texto_monetario(valor):
     return limpio[0] if limpio else ""
 #--------------------prueba----------------------------------
 def simular_qr_transaccion_prueba():
-    import pandas as pd
-    from random import randint
 
     global DATOS_DETALLE_QR
 
@@ -1351,7 +1340,6 @@ def ventana_asignar_qr_sin_comprobante(root, nro_transaccion, fila_qr):
         command=top.destroy
     ).pack(side="left", padx=5)
 
-import re
 
 def extraer_numeros(texto):
     if not texto:
@@ -5060,7 +5048,6 @@ def obtener_fecha_internet():
         with urllib.request.urlopen(req, timeout=5) as response:
             date_str = response.headers['Date']
             # El formato que devuelve Google es: 'Thu, 19 Feb 2026 16:00:00 GMT'
-            from datetime import datetime
             fecha_real = datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S %Z")
             return fecha_real
     except Exception:
@@ -5082,8 +5069,6 @@ def validar_licencia():
         fecha_actual = datetime.now()
         
     if fecha_actual > fecha_caducidad:
-        import tkinter as tk
-        from tkinter import messagebox
         root = tk.Tk()
         root.withdraw() # Oculta la ventana principal
         messagebox.showerror(
