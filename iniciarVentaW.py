@@ -5168,7 +5168,7 @@ def obtener_fecha_internet():
     """Consulta la hora real a los servidores de Google para evitar trampas con el reloj local."""
     try:
         # Hacemos una petición rápida solo para leer el encabezado de la fecha
-        req = urllib.request.Request("http://www.google.com", method="HEAD")
+        req = urllib.request.Request("https://www.google.com", method="HEAD")
         with urllib.request.urlopen(req, timeout=5) as response:
             date_str = response.headers['Date']
             # El formato que devuelve Google es: 'Thu, 19 Feb 2026 16:00:00 GMT'
