@@ -40,6 +40,7 @@ DATOS_DETALLE_REMITOS = {}
 DATOS_DETALLE_FACTURACION = {} 
 DATOS_RENDICIONES = {}
 DF_RENDICIONES_CACHE = None
+DF_VENDEDORES_CACHE = None
 COLOR_MAS = "#3498db"      # azul
 COLOR_EDIT = "#f1c40f"    # amarillo
 CAJAS_DATA = {}
@@ -2885,6 +2886,9 @@ def crear_autocomplete(parent, lista_opciones):
 
 def cargar_vendedores_db():
     global DF_VENDEDORES_CACHE
+    if DF_VENDEDORES_CACHE is not None:
+        return
+
     conn = obtener_conexion_sql()
     if not conn:
         return
