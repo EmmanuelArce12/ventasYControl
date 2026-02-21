@@ -997,7 +997,7 @@ def limpiar_texto_monetario(valor):
         return ""
     s = str(valor)
     # deja solo dígitos, coma, punto y signo -
-    limpio = re.findall(r'-?\d+[.,]?\d*', s)
+    limpio = re.findall(r'-?\d+(?:[.,]\d+)*', s)
     return limpio[0] if limpio else ""
 #--------------------prueba----------------------------------
 def simular_qr_transaccion_prueba():
