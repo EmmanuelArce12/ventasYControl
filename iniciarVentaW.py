@@ -626,6 +626,16 @@ from datetime import datetime
 import os
 from tkinter import messagebox
 
+def obtener_ruta_cierre_caja():
+    """
+    Devuelve la ruta segura para guardar los cierres de caja.
+    Crea el directorio si no existe.
+    """
+    carpeta = os.path.join(os.path.expanduser("~"), "cierres de caja")
+    os.makedirs(carpeta, exist_ok=True)
+    return carpeta
+
+
 def guardar_cierre_caja_excel():
     global TURNO_SELECCIONADO, widgets
 
@@ -633,8 +643,7 @@ def guardar_cierre_caja_excel():
         messagebox.showwarning("Guardar cierre", "Debe seleccionar un turno.")
         return
 
-    carpeta = "C:/cierres de caja/"
-    os.makedirs(carpeta, exist_ok=True)
+    carpeta = obtener_ruta_cierre_caja()
 
     fecha = datetime.now().strftime("%Y-%m-%d")
     ruta = os.path.join(
