@@ -7,6 +7,7 @@ import copy
 import os
 import urllib.request
 import sys
+import configparser
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -14,10 +15,41 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # ------------------------------------------------------------
 # 1. CONFIGURACIÓN DB
 # ------------------------------------------------------------
-DB_IP = "192.168.0.100" 
-DB_USER = "debo" 
-DB_PASS = "debo" 
-DB_NAME = "DEBO"
+def load_db_config():
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+
+    db_config = {}
+
+    # Priority 1: Environment Variables
+    db_config['DB_IP'] = os.environ.get('DB_IP')
+    db_config['DB_USER'] = os.environ.get('DB_USER')
+    db_config['DB_PASS'] = os.environ.get('DB_PASS')
+    db_config['DB_NAME'] = os.environ.get('DB_NAME')
+
+    # Priority 2: Config File
+    if 'DATABASE' in config:
+        if not db_config['DB_IP']:
+            db_config['DB_IP'] = config['DATABASE'].get('DB_IP')
+        if not db_config['DB_USER']:
+            db_config['DB_USER'] = config['DATABASE'].get('DB_USER')
+        if not db_config['DB_PASS']:
+            db_config['DB_PASS'] = config['DATABASE'].get('DB_PASS')
+        if not db_config['DB_NAME']:
+            db_config['DB_NAME'] = config['DATABASE'].get('DB_NAME')
+
+    # Default to empty string if not found
+    for key in ['DB_IP', 'DB_USER', 'DB_PASS', 'DB_NAME']:
+        if db_config[key] is None:
+            db_config[key] = ""
+
+    return db_config
+
+_db_config = load_db_config()
+DB_IP = _db_config['DB_IP']
+DB_USER = _db_config['DB_USER']
+DB_PASS = _db_config['DB_PASS']
+DB_NAME = _db_config['DB_NAME']
 
 #----------------------------------------Globales--------------
 
