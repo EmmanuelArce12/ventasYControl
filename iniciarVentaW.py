@@ -21,6 +21,7 @@ DB_NAME = "DEBO"
 
 #----------------------------------------Globales--------------
 
+NUMEROS_RE = re.compile(r"\d+")
 PLANILLA_DESDE_SQL = None
 PLANILLA_HASTA_SQL = None
 CONSULTAR_SQL_HANDLER = None
@@ -1450,7 +1451,7 @@ import re
 def extraer_numeros(texto):
     if not texto:
         return []
-    return re.findall(r'\d+', str(texto))
+    return NUMEROS_RE.findall(str(texto))
 
 def aplicar_qr_a_vendedor_desde_anotacion(anot):
     """
