@@ -2207,10 +2207,6 @@ def accion_buscar_transaccion(root):
 
 def buscar_transaccion_qr(id_transaccion):
     # 🔒 Si ya fue asignado manualmente, excluir del circuito QR
-    print("BUSCANDO TRANSACCION:", id_transaccion)
-    print("ANOTACIONES:")
-    for a in ANOTACIONES_TMP:
-        print(a["transaccion"], a["estado"])
 
     for a in ANOTACIONES_TMP:
         if (
