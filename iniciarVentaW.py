@@ -14,10 +14,11 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # ------------------------------------------------------------
 # 1. CONFIGURACIÓN DB
 # ------------------------------------------------------------
-DB_IP = "192.168.0.100" 
-DB_USER = "debo" 
-DB_PASS = "debo" 
-DB_NAME = "DEBO"
+# Las credenciales se obtienen de variables de entorno por seguridad
+DB_IP = os.environ.get("DB_IP")
+DB_USER = os.environ.get("DB_USER")
+DB_PASS = os.environ.get("DB_PASS")
+DB_NAME = os.environ.get("DB_NAME")
 
 #----------------------------------------Globales--------------
 
@@ -164,6 +165,10 @@ def calcular_gnc_general(aforadores):
 
 def obtener_conexion_sql():
     """Intenta conectar a la base de datos SQL Server y maneja errores."""
+    if not all([DB_IP, DB_USER, DB_PASS, DB_NAME]):
+        messagebox.showerror("Error de Configuración", "Faltan credenciales de base de datos en variables de entorno (DB_IP, DB_USER, DB_PASS, DB_NAME).")
+        return None
+
     try:
         conn_str = (
             f"DRIVER={{SQL Server}};SERVER={DB_IP};DATABASE={DB_NAME};"
