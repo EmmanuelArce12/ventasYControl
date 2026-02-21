@@ -7,6 +7,7 @@ import copy
 import os
 import urllib.request
 import sys
+import logging
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -171,7 +172,8 @@ def obtener_conexion_sql():
         )
         return pyodbc.connect(conn_str)
     except Exception as e:
-        messagebox.showerror("Error de Red", f"No se pudo conectar a la DB:\n{e}")
+        logging.error(f"Error connecting to database: {e}")
+        messagebox.showerror("Error de Red", "No se pudo conectar a la base de datos. Por favor verifique su conexión o contacte al administrador.")
         return None
 
 
@@ -5205,6 +5207,7 @@ def validar_licencia():
         )
         sys.exit() # Cierra el proceso por completo y no deja abrir la app
 def main():
+    logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
     # 1. Ejecutar el control de seguridad antes de cargar nada
     validar_licencia()
 
