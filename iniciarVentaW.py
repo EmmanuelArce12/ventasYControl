@@ -211,6 +211,12 @@ def obtener_conexion_sql():
 # ------------------------------------------------------------
 # 2. HERRAMIENTAS
 # ------------------------------------------------------------
+def obtener_ruta_cierre_caja():
+    """Generates the path for the closure report folder."""
+    home = os.path.expanduser("~")
+    carpeta = os.path.join(home, "cierres de caja")
+    return carpeta
+
 def actualizar_diferencias_ui():
         for v, diff in DIFERENCIAS_VENDEDORES.items():
             if v in widgets:
@@ -571,7 +577,7 @@ def guardar_cierre_caja_excel():
         messagebox.showwarning("Guardar cierre", "Debe seleccionar un turno.")
         return
 
-    carpeta = "C:/cierres de caja/"
+    carpeta = obtener_ruta_cierre_caja()
     os.makedirs(carpeta, exist_ok=True)
 
     fecha = datetime.now().strftime("%Y-%m-%d")
