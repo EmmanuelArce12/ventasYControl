@@ -2884,7 +2884,7 @@ def normalizar_texto(texto):
     if not texto or str(texto).lower() == 'nan':
         return ""
     # Elimina patrones como "1 - " o "23-"
-    return re.sub(r'^\d+\s*-\s*', '', str(texto)).strip().upper()
+    return re.sub(r'^\s*\d+\s*-\s*', '', str(texto)).strip().upper()
 
 def parse_moneda_robusto(valor):
     """Convierte un valor de texto o numérico a float, limpiando símbolos como el $."""
