@@ -2942,12 +2942,6 @@ def son_nombres_similares(excel, db):
 
     return pal_ex.issubset(pal_db)
 
-        
-    pal_ex, pal_db = set(ex.split()), set(db.split())
-    # Similares si un nombre es subconjunto de las palabras del otro.
-    return pal_db.issubset(pal_ex) or pal_ex.issubset(pal_db)
-
-
 # ------------------------------------------------------------
 # 3. VENTANA DETALLE (LUPA)
 # ------------------------------------------------------------
