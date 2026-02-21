@@ -171,7 +171,8 @@ def obtener_conexion_sql():
         )
         return pyodbc.connect(conn_str)
     except Exception as e:
-        messagebox.showerror("Error de Red", f"No se pudo conectar a la DB:\n{e}")
+        messagebox.showerror("Error de Red", "No se pudo conectar a la base de datos. Verifique su conexión de red o contacte al administrador.")
+        print(f"Error de conexión: {e}")
         return None
 
 
@@ -4908,7 +4909,7 @@ ORDER BY
          
     
         except Exception as e:
-            messagebox.showerror("Error SQL", str(e))
+            messagebox.showerror("Error SQL", "Ocurrió un error al procesar la consulta SQL. Por favor, verifique los datos e intente nuevamente.")
             print("ERROR FATAL:", e)
 
     CONSULTAR_SQL_HANDLER = consultar_sql_completo
