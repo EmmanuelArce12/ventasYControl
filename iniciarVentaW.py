@@ -14,10 +14,50 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # ------------------------------------------------------------
 # 1. CONFIGURACIÓN DB
 # ------------------------------------------------------------
-DB_IP = "192.168.0.100" 
-DB_USER = "debo" 
-DB_PASS = "debo" 
-DB_NAME = "DEBO"
+import configparser
+
+def load_db_config():
+    """
+    Carga la configuración de base de datos desde variables de entorno,
+    archivo de configuración (config.ini), o valores por defecto.
+    """
+    config = configparser.ConfigParser()
+    config_file = 'config.ini'
+
+    # Valores por defecto (Hardcoded originales)
+    # Se mantienen para compatibilidad si no existe config.ini
+    defaults = {
+        "DB_IP": "192.168.0.100",
+        "DB_USER": "debo",
+        "DB_PASS": "debo",
+        "DB_NAME": "DEBO"
+    }
+
+    if os.path.exists(config_file):
+        config.read(config_file)
+
+    db_config = {}
+    for key, default_val in defaults.items():
+        # 1. Variable de Entorno
+        val = os.environ.get(key)
+
+        # 2. Archivo de Configuración
+        if val is None and 'DATABASE' in config:
+            val = config['DATABASE'].get(key)
+
+        # 3. Valor por Defecto
+        if val is None:
+            val = default_val
+
+        db_config[key] = val
+
+    return db_config
+
+_DB_CONFIG = load_db_config()
+DB_IP = _DB_CONFIG["DB_IP"]
+DB_USER = _DB_CONFIG["DB_USER"]
+DB_PASS = _DB_CONFIG["DB_PASS"]
+DB_NAME = _DB_CONFIG["DB_NAME"]
 
 #----------------------------------------Globales--------------
 

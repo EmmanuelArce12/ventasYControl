@@ -1,0 +1,5 @@
+[DATABASE]
+DB_IP = 192.168.0.100
+DB_USER = debo
+DB_PASS = debo
+DB_NAME = DEBO
