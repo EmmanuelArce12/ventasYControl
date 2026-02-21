@@ -2802,35 +2802,6 @@ def confirmar_trabajo(vendedor_actual, combo_local):
     refrescar_interfaz()
 
 
-
-def unir_cajas_real(id_a, id_b):
-    caja_a = CAJAS_DATA[id_a]
-    caja_b = CAJAS_DATA[id_b]
-
-    nuevo_id = id_a | id_b
-
-    def unir_df(a, b):
-        if a is None:
-            return b
-        if b is None:
-            return a
-        return pd.concat([a, b], ignore_index=True)
-
-    CAJAS_DATA[nuevo_id] = {
-        "vendedores": caja_a["vendedores"] | caja_b["vendedores"],
-        "qr": unir_df(caja_a["qr"], caja_b["qr"]),
-        "fact": unir_df(caja_a["fact"], caja_b["fact"]),
-        "rend": unir_df(caja_a["rend"], caja_b["rend"]),
-        "anot": caja_a["anot"] + caja_b["anot"]
-    }
-
-    del CAJAS_DATA[id_a]
-    del CAJAS_DATA[id_b]
-
-    return nuevo_id
-
-
-
 def cargar_responsables_gnc():
     cargar_vendedores_db()  # Trae todo de SQL
     if DF_VENDEDORES_CACHE is None or DF_VENDEDORES_CACHE.empty:
