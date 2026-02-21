@@ -91,7 +91,6 @@ TREE_ANOTACIONES = None
 
 HISTORIAL_CAJAS = []
 
-GNC_EXTRA_POR_RESPONSABLE = {} # responsable -> monto
 RESPONSABLES_GNC_VALIDOS = [
     "RICARDO RAMON",
     "KARINA ADRIANA",
@@ -2604,7 +2603,7 @@ def refrescar_interfaz():
 
 def resetear_estado_global():
     global GNC_GENERAL_TOTAL, GNC_COBERTURAS, GNC_TOTAL_COBERTURAS
-    global GNC_PARA_CAJA, GNC_EXTRA_POR_RESPONSABLE
+    global GNC_PARA_CAJA
     global UNDO_STACK
 
     global ANOTACIONES_TMP, LABELS_ANOTACIONES
@@ -2621,7 +2620,6 @@ def resetear_estado_global():
     GNC_COBERTURAS = []
     GNC_TOTAL_COBERTURAS = 0.0
     GNC_PARA_CAJA = 0.0
-    GNC_EXTRA_POR_RESPONSABLE = {}
 
     # -------------------------
     # ANOTACIONES
@@ -2948,7 +2946,6 @@ def recalcular_gnc(
     global GNC_COBERTURAS
     global GNC_TOTAL_COBERTURAS
     global GNC_PARA_CAJA
-    global GNC_EXTRA_POR_RESPONSABLE
 
     # 1️⃣ GNC GENERAL
     GNC_GENERAL_TOTAL = calcular_gnc_general(aforadores_gnc_general)
@@ -2960,12 +2957,6 @@ def recalcular_gnc(
     # 3️⃣ GNC QUE VA A CAJA
     GNC_PARA_CAJA = GNC_GENERAL_TOTAL - GNC_TOTAL_COBERTURAS
 
-    # 4️⃣ SUMAR A RESPONSABLES
-    GNC_EXTRA_POR_RESPONSABLE = {}
-
-    for c in coberturas_gnc:
-        GNC_EXTRA_POR_RESPONSABLE.setdefault(c.responsable, 0.0)
-        GNC_EXTRA_POR_RESPONSABLE[c.responsable] += c.total()
     # ================= RESPONSABLE GNC =================
     aplicar_coberturas_gnc_a_bases()
     refrescar_calculo_principal()
