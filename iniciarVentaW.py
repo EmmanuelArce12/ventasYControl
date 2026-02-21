@@ -52,6 +52,7 @@ DESCUENTOS_QR_POR_VENDEDOR = {}
 # GNC - SQL CACHE
 # =========================
 DF_GNC_SQL_CACHE = None
+DF_VENDEDORES_CACHE = None
 
 PRECIO_GNC_DEFAULT = 669
 # =========================
@@ -2791,6 +2792,9 @@ def crear_autocomplete(parent, lista_opciones):
 
 def cargar_vendedores_db():
     global DF_VENDEDORES_CACHE
+    if DF_VENDEDORES_CACHE is not None:
+        return
+
     conn = obtener_conexion_sql()
     if not conn:
         return
