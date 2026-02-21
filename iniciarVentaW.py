@@ -4868,14 +4868,6 @@ ORDER BY
             else:
                 print("\nNO se encontraron Notas de Crédito en este rango de planillas.")
 
-            # 1. Llenar QR
-           # c_qr = 0
-           # for _, r in df_qr.iterrows():
-           #     for v_ex, w in widgets.items():
-            #        if son_nombres_similares(v_ex, r['Operario']):
-             #           w['qr'].delete(0, tk.END)
-              #          w['qr'].insert(0, f"{r['Total']:.2f}")
-               #         c_qr += 1
             
 
 
