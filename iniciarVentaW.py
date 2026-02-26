@@ -709,19 +709,55 @@ def guardar_cierre_caja_excel():
         if df is None or df.empty:
             continue
 
-        for _, r in df.iterrows():
-            ws_qr.append([
-                PLANILLA_DESDE_SQL or "",
-                r.get("Operario"),
-                r.get("FEC"),
-                f"{r.get('TIP','')}-{r.get('TCO','')}-{r.get('NCO','')}",
-                r.get("Estado_QR"),
-                normalizar_id_transaccion(r.get("ID_TRANSACCION")),
-                r.get("IMPORTE"),
-                r.get("CASHOUT"),
-                r.get("DESC_PROMO"),
-                r.get("QR_FINAL")
-            ])
+        length = len(df)
+
+        # Helper for safe column access
+        def get_col(name, default=None):
+            col = df.get(name)
+            if col is None:
+                return [default] * length
+            return col
+
+        operario = get_col("Operario")
+        fec = get_col("FEC")
+
+        # Comprobante construction (vectorized)
+        tip = df.get("TIP")
+        tip = tip.fillna("").astype(str) if tip is not None else pd.Series([""] * length)
+
+        tco = df.get("TCO")
+        tco = tco.fillna("").astype(str) if tco is not None else pd.Series([""] * length)
+
+        nco = df.get("NCO")
+        nco = nco.fillna("").astype(str) if nco is not None else pd.Series([""] * length)
+
+        comprobante = tip + "-" + tco + "-" + nco
+
+        estado = get_col("Estado_QR")
+
+        # Transacciones processing
+        id_trans = df.get("ID_TRANSACCION")
+        transacciones = id_trans.apply(normalizar_id_transaccion) if id_trans is not None else [None] * length
+
+        importe = get_col("IMPORTE")
+        cashout = get_col("CASHOUT")
+        desc_promo = get_col("DESC_PROMO")
+        qr_final = get_col("QR_FINAL")
+
+        # Zip and append
+        for row in zip(
+            [PLANILLA_DESDE_SQL or ""] * length,
+            operario,
+            fec,
+            comprobante,
+            estado,
+            transacciones,
+            importe,
+            cashout,
+            desc_promo,
+            qr_final
+        ):
+            ws_qr.append(row)
 
     ajustar_columnas(ws_qr)
 
