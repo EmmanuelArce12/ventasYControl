@@ -4600,19 +4600,34 @@ ORDER BY
             # =========================
             # CARGAR EFECTIVO SQL A MOVIMIENTOS
             # =========================
-            for _, row in DF_RENDICIONES_CACHE.iterrows():
-                vendedor_sql = str(row['Vendedor']).strip().upper()
-                monto = parse_moneda_robusto(row['Efectivo'])
+            # ⚡ OPTIMIZACIÓN: Precomputar normalización de nombres de widgets
+            widgets_norm = []
+            for vend_ui in widgets.keys():
+                norm = normalizar_texto(vend_ui)
+                if norm:
+                    widgets_norm.append((vend_ui, set(norm.split())))
 
-                for vend_ui in widgets.keys():
-                    if son_nombres_similares(vend_ui, vendedor_sql):
+            # ⚡ OPTIMIZACIÓN: Precomputar parseo y normalización para evitar el loop N*M
+            df_rend = DF_RENDICIONES_CACHE.copy()
+            df_rend['monto_parsed'] = df_rend['Efectivo'].apply(parse_moneda_robusto)
+            df_rend['vend_norm_set'] = df_rend['Vendedor'].apply(lambda x: set(normalizar_texto(x).split()))
+
+            # Usar itertuples que es mucho más rápido que iterrows
+            for row in df_rend.itertuples(index=False):
+                pal_db = row.vend_norm_set
+
+                if not pal_db:
+                    continue
+
+                for vend_ui, pal_ex in widgets_norm:
+                    if pal_db.issubset(pal_ex):
                         DATOS_RENDICIONES.setdefault(vend_ui, {}).setdefault('movimientos', []).append({
                             'origen': 'sql',
-                            'planilla': row['Planilla'],
-                            'nro': row['Nro_Mov'],
+                            'planilla': row.Planilla,
+                            'nro': row.Nro_Mov,
                             'tipo': 'Efectivo',
-                            'ref': f"Mov {row['Nro_Mov']} - {row['Fecha']:%d/%m %H:%M}",
-                            'monto': float(monto)
+                            'ref': f"Mov {row.Nro_Mov} - {row.Fecha:%d/%m %H:%M}",
+                            'monto': float(row.monto_parsed)
                         })
                         break
 
