@@ -274,17 +274,6 @@ def reflejar_totales_en_ui(vendedor_principal):
     )
 
 
-def desactivar_fila(v):
-    w = widgets[v]
-    w["fusionado"] = True
-
-    w["row"].configure(bg="#dcdcdc")
-    for c in w["row"].winfo_children():
-        try:
-            c.configure(state="disabled")
-        except:
-            pass
-
 def recalcular_por_cajas():
     cajas = {}
 
